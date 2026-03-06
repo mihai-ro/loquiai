@@ -2,6 +2,9 @@
   "name": "@mihairo/loqui",
   "version": "1.0.2",
   "description": "loqui — i18n translation engine for software projects.",
+  "repository": {
+    "url": "https://github.com/mihai-ro/loquiai"
+  },
   "keywords": [
     "i18n",
     "translation",

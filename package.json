@@ -2,6 +2,9 @@
   "name": "@mihairo/loqui",
   "version": "1.0.2",
   "description": "loqui — i18n translation engine for software projects.",
+  "repository": {
+    "url": "https://github.com/mihai-ro/loquiai"
+  },
   "keywords": [
     "i18n",
     "translation",
@@ -33,7 +36,7 @@
     "test": "tsc && node --test 'dist/**/*.test.js'",
     "test:watch": "node --test --watch 'dist/**/*.test.js'",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build && npm test",
+    "prepublishOnly": "npm test && npm run clean && npm run build",
     "translate": "node dist/index.js"
   },
   "files": [

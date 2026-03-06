@@ -1,6 +1,6 @@
 {
   "name": "@mihairo/loqui",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "loqui — i18n translation engine for software projects.",
   "keywords": [
     "i18n",

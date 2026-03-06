@@ -1,0 +1,29 @@
+# compiled output — published to npm via package.json "files", not tracked in git
+dist/
+
+# dependencies
+node_modules/
+
+# environment secrets
+.env
+.env.local
+.env.*.local
+
+# runtime-generated hash sidecar files
+*.falar-hash.json
+
+# internal publishing guide — release process is documented in .github/workflows/
+PUBLISHING.md
+
+# project-specific scripts not part of the library
+translate.sh
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo

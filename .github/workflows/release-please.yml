@@ -1,0 +1,30 @@
+name: Release Please
+
+# Runs on every push to main. Release Please inspects the new commits and
+# either creates or updates a "Release PR" that:
+#   - bumps the version in package.json following semver + conventional commits
+#   - regenerates CHANGELOG.md with the new entries
+#
+# When you merge the Release PR, Release Please:
+#   - creates a git tag (e.g. v1.2.0)
+#   - publishes a GitHub Release with the CHANGELOG entry as the body
+#
+# The GitHub Release publication then triggers the publish.yml workflow.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write      # create tags and releases
+  pull-requests: write # open and update the Release PR
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

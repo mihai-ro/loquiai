@@ -1,0 +1,49 @@
+{
+  "name": "falar",
+  "version": "1.0.0",
+  "description": "falar — i18n translation engine for software projects.",
+  "keywords": [
+    "i18n",
+    "translation",
+    "language",
+    "locale",
+    "ai"
+  ],
+  "author": {
+    "name": "Mihai Ro"
+  },
+  "license": "Apache-2.0",
+  "main": "dist/lib.js",
+  "exports": {
+    ".": {
+      "require": "./dist/lib.js",
+      "import": "./dist/lib.js"
+    },
+    "./cli": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "falar": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "tsc && node --test 'dist/**/*.test.js'",
+    "test:watch": "node --test --watch 'dist/**/*.test.js'",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build && npm test",
+    "translate": "node dist/index.js"
+  },
+  "files": [
+    "dist",
+    ".falar.example.json",
+    "falar.schema.json",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

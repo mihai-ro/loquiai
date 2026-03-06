@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "falar.schema.json",
+  "title": "falar configuration",
+  "description": "Engine and model settings. File paths, locales, and namespace are supplied per-run via CLI args or the programmatic API.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "engine": {
+      "type": "string",
+      "enum": ["gemini", "openai", "anthropic"],
+      "default": "gemini"
+    },
+    "model": {
+      "type": "string",
+      "description": "Model name for the selected engine. Accepts any string."
+    },
+    "from": {
+      "type": "string",
+      "description": "Default source locale. Can be overridden per run.",
+      "examples": ["en"]
+    },
+    "to": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Default target locales. Can be overridden per run.",
+      "examples": [["fr", "de", "es"]]
+    },
+    "temperature": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 0.1
+    },
+    "topP": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 1
+    },
+    "concurrency": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32,
+      "default": 8
+    },
+    "splitToken": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 32000,
+      "default": 4000
+    },
+    "context": {
+      "type": "string",
+      "description": "Domain context injected into prompts to improve accuracy.",
+      "examples": ["a workforce scheduling app used by hospital shift managers"]
+    },
+    "prompts": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Custom prompt templates. Variables: {{sourceLocale}}, {{targetLocales}}, {{namespace}}, {{context}}, {{json}}.",
+      "properties": {
+        "system": { "type": "string" },
+        "user": { "type": "string" }
+      }
+    },
+    "placeholderPatterns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Extra regex patterns (as strings) for tokens to preserve through translation. Applied before built-ins: {{...}}, ${...}, {var}, ICU blocks, HTML tags.",
+      "examples": [["%\\{[^}]+\\}"]]
+    }
+  }
+}

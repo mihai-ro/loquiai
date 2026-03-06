@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  # pull-requests: read is needed for the PR title lint job
+  pull-requests: read
+
+jobs:
+  # ── Validate PR title follows Conventional Commits ───────────────────────────
+  # Release Please reads merged commit messages to determine the next version
+  # and populate CHANGELOG.md. Enforcing the convention on PR titles ensures
+  # squash-merged commits are always well-formed.
+  lint-pr-title:
+    name: Lint PR title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Allowed types (must match release-please-config.json changelog-sections)
+          types: |
+            feat
+            fix
+            perf
+            revert
+            docs
+            refactor
+            test
+            build
+            ci
+            chore
+          # Allow scope in PR titles, e.g. "feat(placeholder): ..."
+          requireScope: false
+
+  # ── Build and test ────────────────────────────────────────────────────────────
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm test

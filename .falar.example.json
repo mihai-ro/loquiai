@@ -1,0 +1,9 @@
+{
+  "$schema": "./falar.schema.json",
+  "engine": "gemini",
+  "model": "gemini-2.5-flash",
+  "from": "en",
+  "to": ["fr", "de", "es"],
+  "temperature": 0.1,
+  "concurrency": 8
+}

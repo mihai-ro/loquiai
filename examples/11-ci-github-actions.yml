@@ -1,0 +1,78 @@
+# examples/11-ci-github-actions.yml
+#
+# Full GitHub Actions workflow that runs translation sync on every push to main,
+# or manually via workflow_dispatch.
+#
+# Copy to .github/workflows/i18n-sync.yml in your project.
+#
+# Required repository secret: GEMINI_API_KEY
+
+name: i18n sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/assets/i18n/**/en.json'   # only run when source files change
+  workflow_dispatch:                    # allow manual trigger from the Actions tab
+    inputs:
+      force:
+        description: 'Re-translate all keys (ignore cache)'
+        type: boolean
+        default: false
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+
+    # Prevent concurrent runs from clobbering each other
+    concurrency:
+      group: i18n-sync
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history needed so git push works correctly
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Translate (incremental)
+        run: |
+          FORCE_FLAG=""
+          if [ "${{ inputs.force }}" = "true" ]; then
+            FORCE_FLAG="--force"
+          fi
+
+          npx falar \
+            --input src/assets/i18n/en.json \
+            --from en \
+            --to fr,de,es,ja,pt \
+            --output "src/assets/i18n/{locale}.json" \
+            --incremental \
+            $FORCE_FLAG
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Commit updated translations
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet src/assets/i18n/; then
+            echo "No translation files changed."
+            exit 0
+          fi
+
+          git add src/assets/i18n/
+          git commit -m "chore: sync translations [skip ci]"
+          git push

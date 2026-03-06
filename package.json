@@ -28,8 +28,8 @@
     "loqui": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "build:watch": "tsc --watch",
+    "build": "tsc -p tsconfig.build.json",
+    "build:watch": "tsc -p tsconfig.build.json --watch",
     "test": "tsc && node --test 'dist/**/*.test.js'",
     "test:watch": "node --test --watch 'dist/**/*.test.js'",
     "clean": "rm -rf dist",

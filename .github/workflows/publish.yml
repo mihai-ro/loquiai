@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
           # Configures npm to authenticate against the public registry using
           # NODE_AUTH_TOKEN (set below from the NPM_TOKEN secret).
           registry-url: 'https://registry.npmjs.org'

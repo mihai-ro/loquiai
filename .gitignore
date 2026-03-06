@@ -27,3 +27,6 @@ translate.sh
 .idea/
 *.swp
 *.swo
+
+# explicitly track node version file (may be ignored by global gitignore)
+!.node-version

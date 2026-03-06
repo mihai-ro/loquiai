@@ -33,7 +33,7 @@
     "test": "tsc && node --test 'dist/**/*.test.js'",
     "test:watch": "node --test --watch 'dist/**/*.test.js'",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build && npm test",
+    "prepublishOnly": "npm test && npm run clean && npm run build",
     "translate": "node dist/index.js"
   },
   "files": [

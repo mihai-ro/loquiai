@@ -4,10 +4,10 @@ import { loadConfig } from './config.js';
 import { translateJson } from './translator.js';
 import { flatten, unflatten, deepSortKeys, readJson, writeJson } from './utils/json.js';
 import { loadHashStore, saveHashStore } from './hasher.js';
-import { FalarConfig, FlatTranslations, RunStats, EngineAdapter, HashStore, TranslationChunk, TranslationResult } from './types.js';
+import { LoquiConfig, FlatTranslations, RunStats, EngineAdapter, HashStore, TranslationChunk, TranslationResult } from './types.js';
 
 export { BaseEngine } from './engines/base.engine.js';
-export type { FalarConfig, RunStats, FlatTranslations, EngineAdapter, TranslationChunk, TranslationResult };
+export type { LoquiConfig, RunStats, FlatTranslations, EngineAdapter, TranslationChunk, TranslationResult };
 
 export interface TranslateOptions {
   /**
@@ -34,7 +34,7 @@ export interface TranslateOptions {
   /**
    * Enable hash-based incremental translation: only keys that are new or whose
    * source text changed since the last run will be sent to the engine.
-   * Hash sidecar is stored next to the input file as `.{name}.falar-hash.json`,
+   * Hash sidecar is stored next to the input file as `.{name}.loqui-hash.json`,
    * or at the path specified by hashFile.
    */
   incremental?: boolean;
@@ -47,11 +47,11 @@ export interface TranslateOptions {
   /** Custom engine — bypasses config.engine. */
   engine?: EngineAdapter;
   /** Inline config merged over any config file found. */
-  config?: Partial<FalarConfig>;
+  config?: Partial<LoquiConfig>;
   /**
    * Path to a config file or directory containing one.
    * - file: `./configs/prod.json` — loaded directly
-   * - directory: `./project` — searches for `.falar.json` / `.i18nrc.json`
+   * - directory: `./project` — searches for `.loqui.json` / `.i18nrc.json`
    * Defaults to process.cwd().
    */
   configPath?: string;
@@ -65,7 +65,7 @@ export interface TranslateOptions {
 export async function translate(options: TranslateOptions): Promise<Record<string, string>> {
   const fileConfig = loadConfig(options.configPath);
   // inline config takes priority over file config
-  const config: FalarConfig = options.config ? { ...fileConfig, ...options.config } : fileConfig;
+  const config: LoquiConfig = options.config ? { ...fileConfig, ...options.config } : fileConfig;
 
   const from = options.from ?? config.from;
   if (!from) throw new Error("'from' (source locale) is required. Set it in options or config.");
@@ -104,7 +104,7 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
 
   // load hash store if incremental
   const useIncremental = options.incremental || Boolean(options.hashFile);
-  const hashFilePath = options.hashFile ?? (inputPath ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.falar-hash.json`) : null);
+  const hashFilePath = options.hashFile ?? (inputPath ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-hash.json`) : null);
   const hashStore: HashStore = useIncremental && hashFilePath ? loadHashStore(hashFilePath) : {};
 
   const { translations, updatedHashStore, stats } = await translateJson({

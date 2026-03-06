@@ -8,7 +8,7 @@
  *   GEMINI_API_KEY=... npx ts-node examples/01-basic.ts
  */
 
-import { translate } from 'falar';
+import { translate } from '@mihairo/loqui';
 
 const result = await translate({
   input: './en.json',

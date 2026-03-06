@@ -1,4 +1,4 @@
-import { FlatTranslations, TranslationChunk, FalarConfig, RunStats, HashStore, EngineAdapter } from './types.js';
+import { FlatTranslations, TranslationChunk, LoquiConfig, RunStats, HashStore, EngineAdapter } from './types.js';
 import { maskPlaceholders, restorePlaceholders } from './placeholder.js';
 import { hashValue, buildUpdatedHashStore } from './hasher.js';
 import { createEngine } from './engines/factory.js';
@@ -9,7 +9,7 @@ export interface TranslateJobOptions {
   from: string;
   to: string[];
   namespace: string;
-  config: FalarConfig;
+  config: LoquiConfig;
   /** existing translations per locale — used to skip already-translated keys */
   existing?: Record<string, FlatTranslations>;
   /** if provided, also re-translate keys whose source text changed since last run */
@@ -120,7 +120,7 @@ interface ProcessChunkOptions {
   sourceFlat: FlatTranslations;
   namespace: string;
   workingTargets: Record<string, FlatTranslations>;
-  config: FalarConfig;
+  config: LoquiConfig;
   stats: RunStats;
 }
 

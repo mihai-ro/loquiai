@@ -53,7 +53,7 @@ jobs:
             FORCE_FLAG="--force"
           fi
 
-          npx falar \
+          npx loqui \
             --input src/assets/i18n/en.json \
             --from en \
             --to fr,de,es,ja,pt \

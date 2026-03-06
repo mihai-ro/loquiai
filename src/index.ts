@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 
 /**
- * falar — i18n translation CLI
+ * loqui — i18n translation CLI
  *
  * Usage:
- *   falar [input] [options]
+ *   loqui [input] [options]
  *
  *   [input] — one of:
  *     --input <file>         read from a JSON file
  *     --input '<json>'       pass a JSON string inline
- *     first positional arg   falar '{"key":"val"}' --from en --to fr
- *     stdin                  cat en.json | falar --from en --to fr
+ *     first positional arg   loqui '{"key":"val"}' --from en --to fr
+ *     stdin                  cat en.json | loqui --from en --to fr
  *
  * Options:
- *   --config <path>        Config file or directory (default: .falar.json in cwd)
+ *   --config <path>        Config file or directory (default: .loqui.json in cwd)
  *   --from <locale>        Source locale — overrides config.from
  *   --to <locale,...>      Target locale(s), comma-separated — overrides config.to
  *   --engine <name>        Engine: gemini | openai | anthropic — overrides config.engine
@@ -40,7 +40,7 @@ import path from 'path';
 import { createInterface } from 'readline/promises';
 import { translate } from './lib.js';
 import { logger } from './utils/logger.js';
-import { FalarConfig, CONFIG_DEFAULTS } from './types.js';
+import { LoquiConfig, CONFIG_DEFAULTS } from './types.js';
 
 const VALUE_FLAGS = new Set([
   '--input', '--config', '--from', '--to',
@@ -123,11 +123,11 @@ const API_KEY_VAR: Record<string, string> = {
 
 async function runInit(): Promise<void> {
   if (!process.stdin.isTTY) {
-    logger.error('falar init must be run in an interactive terminal.');
+    logger.error('loqui init must be run in an interactive terminal.');
     process.exit(1);
   }
 
-  const configPath = path.resolve(process.cwd(), '.falar.json');
+  const configPath = path.resolve(process.cwd(), '.loqui.json');
 
   // Use a single readline interface throughout so stdin is never closed mid-session
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -137,7 +137,7 @@ async function runInit(): Promise<void> {
   };
 
   if (fs.existsSync(configPath)) {
-    const answer = (await rl.question('\n  .falar.json already exists. Overwrite? [y/N] ')).trim().toLowerCase();
+    const answer = (await rl.question('\n  .loqui.json already exists. Overwrite? [y/N] ')).trim().toLowerCase();
     if (answer !== 'y' && answer !== 'yes') {
       rl.close();
       process.stdout.write('  Aborted.\n');
@@ -145,7 +145,7 @@ async function runInit(): Promise<void> {
     }
   }
 
-  process.stdout.write('\n  Welcome to falar — let\'s set up your config.\n\n');
+  process.stdout.write('\n  Welcome to loqui — let\'s set up your config.\n\n');
 
   const engine = await ask('  Engine [gemini / openai / anthropic] (gemini): ', 'gemini');
   if (!['gemini', 'openai', 'anthropic'].includes(engine)) {
@@ -163,8 +163,8 @@ async function runInit(): Promise<void> {
 
   rl.close();
 
-  const config: Partial<FalarConfig> = {
-    engine: engine as FalarConfig['engine'],
+  const config: Partial<LoquiConfig> = {
+    engine: engine as LoquiConfig['engine'],
     model,
     from,
     to,
@@ -175,14 +175,14 @@ async function runInit(): Promise<void> {
   };
   if (context) config.context = context;
 
-  const json = JSON.stringify({ $schema: './node_modules/falar/falar.schema.json', ...config }, null, 2) + '\n';
+  const json = JSON.stringify({ $schema: './node_modules/loqui/loqui.schema.json', ...config }, null, 2) + '\n';
   fs.writeFileSync(configPath, json, 'utf-8');
 
-  process.stdout.write(`\n  Created .falar.json\n\n`);
+  process.stdout.write(`\n  Created .loqui.json\n\n`);
   process.stdout.write(`  Next step — set your API key:\n`);
   process.stdout.write(`    export ${API_KEY_VAR[engine]}=your-key-here\n\n`);
   process.stdout.write(`  Then translate:\n`);
-  process.stdout.write(`    falar --input en.json --output ./i18n/{locale}.json --incremental\n\n`);
+  process.stdout.write(`    loqui --input en.json --output ./i18n/{locale}.json --incremental\n\n`);
 }
 
 async function main(): Promise<void> {
@@ -200,7 +200,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  logger.header('[falar] i18n translator');
+  logger.header('[loqui] i18n translator');
 
   let input = args.input;
   if (!input) {
@@ -219,8 +219,8 @@ async function main(): Promise<void> {
   if (args.force) logger.warn('Force mode — all keys will be re-translated.');
 
   // collect inline overrides — these take priority over the config file
-  const configOverrides: Partial<FalarConfig> = {};
-  if (args.engine) configOverrides.engine = args.engine as FalarConfig['engine'];
+  const configOverrides: Partial<LoquiConfig> = {};
+  if (args.engine) configOverrides.engine = args.engine as LoquiConfig['engine'];
   if (args.model) configOverrides.model = args.model;
   if (args.context) configOverrides.context = args.context;
 

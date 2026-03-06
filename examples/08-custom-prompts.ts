@@ -15,7 +15,7 @@
  *   GEMINI_API_KEY=... npx ts-node examples/08-custom-prompts.ts
  */
 
-import { translate } from 'falar';
+import { translate } from '@mihairo/loqui';
 
 await translate({
   input: './en.json',

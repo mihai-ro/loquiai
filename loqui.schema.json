@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "falar.schema.json",
-  "title": "falar configuration",
+  "$id": "loqui.schema.json",
+  "title": "loqui configuration",
   "description": "Engine and model settings. File paths, locales, and namespace are supplied per-run via CLI args or the programmatic API.",
   "type": "object",
   "additionalProperties": false,

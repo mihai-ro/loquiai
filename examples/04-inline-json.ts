@@ -9,7 +9,7 @@
  *   GEMINI_API_KEY=... npx ts-node examples/04-inline-json.ts
  */
 
-import { translate } from 'falar';
+import { translate } from '@mihairo/loqui';
 
 const source = JSON.stringify({
   welcome: 'Welcome back, {{name}}!',

@@ -1,9 +1,9 @@
-import { FalarConfig, EngineAdapter } from '../types';
+import { LoquiConfig, EngineAdapter } from '../types';
 import { GeminiEngine } from './gemini.engine';
 import { OpenAIEngine } from './openai.engine';
 import { AnthropicEngine } from './anthropic.engine';
 
-export function createEngine(config: FalarConfig, engineOverride?: EngineAdapter): EngineAdapter {
+export function createEngine(config: LoquiConfig, engineOverride?: EngineAdapter): EngineAdapter {
   if (engineOverride) return engineOverride;
 
   switch (config.engine) {

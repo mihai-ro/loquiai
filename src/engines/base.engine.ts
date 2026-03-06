@@ -1,9 +1,9 @@
-import { TranslationChunk, TranslationResult, FalarConfig } from '../types.js';
+import { TranslationChunk, TranslationResult, LoquiConfig } from '../types.js';
 
 export abstract class BaseEngine {
-  protected config: FalarConfig;
+  protected config: LoquiConfig;
 
-  constructor(config: FalarConfig) {
+  constructor(config: LoquiConfig) {
     this.config = config;
   }
 

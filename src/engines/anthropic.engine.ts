@@ -1,5 +1,5 @@
 import { BaseEngine } from './base.engine.js';
-import { TranslationChunk, TranslationResult, FalarConfig } from '../types.js';
+import { TranslationChunk, TranslationResult, LoquiConfig } from '../types.js';
 import { sleep, truncate } from './utils.js';
 
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1';
@@ -10,7 +10,7 @@ const MAX_RETRIES = 5;
 export class AnthropicEngine extends BaseEngine {
   private apiKey: string;
 
-  constructor(config: FalarConfig) {
+  constructor(config: LoquiConfig) {
     super(config);
     const key = process.env['ANTHROPIC_API_KEY'];
     if (!key) throw new Error('ANTHROPIC_API_KEY environment variable is not set.');

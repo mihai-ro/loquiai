@@ -10,7 +10,7 @@ node_modules/
 .env.*.local
 
 # runtime-generated hash sidecar files
-*.falar-hash.json
+*.loqui-hash.json
 
 # internal publishing guide — release process is documented in .github/workflows/
 PUBLISHING.md

@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: npm
-      url: https://www.npmjs.com/package/falar
+      url: https://www.npmjs.com/package/@mihairo/loqui
 
     steps:
       - uses: actions/checkout@v4

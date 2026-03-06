@@ -1,7 +1,7 @@
 /**
  * 07-extend-base-engine.ts
  *
- * Extend BaseEngine to reuse falar's built-in prompt builder and JSON
+ * Extend BaseEngine to reuse loqui's built-in prompt builder and JSON
  * response parser while plugging in a custom HTTP transport.
  *
  * This is the right approach when you want to use a different provider
@@ -11,12 +11,12 @@
  *   MY_API_KEY=... npx ts-node examples/07-extend-base-engine.ts
  */
 
-import { translate, BaseEngine, FalarConfig, TranslationChunk, TranslationResult } from 'falar';
+import { translate, BaseEngine, LoquiConfig, TranslationChunk, TranslationResult } from '@mihairo/loqui';
 
 class MyCustomEngine extends BaseEngine {
   private readonly apiKey: string;
 
-  constructor(config: FalarConfig) {
+  constructor(config: LoquiConfig) {
     super(config);
     const key = process.env['MY_API_KEY'];
     if (!key) throw new Error('MY_API_KEY is not set.');
@@ -50,7 +50,7 @@ class MyCustomEngine extends BaseEngine {
   }
 }
 
-const config: FalarConfig = {
+const config: LoquiConfig = {
   engine: 'gemini',     // ignored — we're providing our own engine
   model: 'my-model',
   temperature: 0.1,

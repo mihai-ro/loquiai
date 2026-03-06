@@ -21,8 +21,8 @@ set -euo pipefail
 
 echo "==> Syncing i18n translations"
 
-# Run falar — stderr captures warnings, exit code is non-zero on chunk failures
-npx falar \
+# Run loqui — stderr captures warnings, exit code is non-zero on chunk failures
+npx loqui \
   --input src/assets/i18n/en.json \
   --from en \
   --to fr,de,es,ja,pt \

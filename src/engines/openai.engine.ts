@@ -1,5 +1,5 @@
 import { BaseEngine } from './base.engine.js';
-import { TranslationChunk, TranslationResult, FalarConfig } from '../types.js';
+import { TranslationChunk, TranslationResult, LoquiConfig } from '../types.js';
 import { sleep, truncate } from './utils.js';
 
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
@@ -8,7 +8,7 @@ const MAX_RETRIES = 5;
 export class OpenAIEngine extends BaseEngine {
   private apiKey: string;
 
-  constructor(config: FalarConfig) {
+  constructor(config: LoquiConfig) {
     super(config);
     const key = process.env['OPENAI_API_KEY'];
     if (!key) throw new Error('OPENAI_API_KEY environment variable is not set.');

@@ -1,4 +1,4 @@
-# Contributing to falar
+# Contributing to loqui
 
 Thank you for taking the time to contribute. All contributions are welcome â€” bug fixes, new features, documentation improvements, and test coverage.
 
@@ -9,8 +9,8 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 ## Getting started
 
 ```sh
-git clone https://github.com/your-org/falar.git
-cd falar
+git clone https://github.com/your-org/loqui.git
+cd loqui
 npm install
 npm run build
 npm test
@@ -53,7 +53,7 @@ All source files live in `src/`. Tests use Node's built-in `node:test` runner â€
 ## Reporting bugs
 
 Open a GitHub issue with:
-- falar version (`npm list falar`)
+- loqui version (`npm list loqui`)
 - Node.js version (`node --version`)
 - A minimal reproduction (input JSON + config + command)
 - The actual vs expected output

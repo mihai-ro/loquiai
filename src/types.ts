@@ -25,8 +25,8 @@ export type AnthropicModel =
 
 export type SupportedModel = GeminiModel | OpenAIModel | AnthropicModel;
 
-/** engine/model/prompt settings — stored in .falar.json */
-export interface FalarConfig {
+/** engine/model/prompt settings — stored in .loqui.json */
+export interface LoquiConfig {
   engine: SupportedEngine;
   model: SupportedModel;
   /** default source locale (can be overridden per call) */
@@ -46,7 +46,7 @@ export interface FalarConfig {
   placeholderPatterns?: string[];
 }
 
-export const CONFIG_DEFAULTS: FalarConfig = {
+export const CONFIG_DEFAULTS: LoquiConfig = {
   engine: 'gemini',
   model: 'gemini-2.5-flash',
   temperature: 0.1,

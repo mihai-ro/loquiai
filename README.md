@@ -1,9 +1,9 @@
-# falar
+# loqui
 
 > i18n translation engine powered by LLMs. Feed it a JSON file, get back translated JSON. No accounts, no dashboards, no lock-in.
 
 ```sh
-npx falar --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
+npx loqui --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
 ```
 
 ---
@@ -15,7 +15,7 @@ npx falar --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
 - **Incremental translation** — only re-translate keys that changed since the last run (recommended)
 - **Placeholder protection** — `{{mustache}}`, `${template}`, `{icu}`, ICU plural/select blocks, HTML tags, and custom patterns are never mutated
 - **Custom prompts** — override system/user prompt templates with your own
-- **Programmatic API** — `import { translate } from 'falar'`
+- **Programmatic API** — `import { translate } from '@mihairo/loqui'`
 - **CLI** — pipe-friendly, stdin/stdout support
 - **Zero runtime dependencies** — only the TypeScript compiler for dev
 
@@ -24,9 +24,9 @@ npx falar --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
 ## Installation
 
 ```sh
-npm install falar
+npm install loqui
 # or
-npm install -g falar   # for the CLI globally
+npm install -g loqui   # for the CLI globally
 ```
 
 Requires **Node.js ≥ 22**.
@@ -38,10 +38,10 @@ Requires **Node.js ≥ 22**.
 **1. Create a config file interactively:**
 
 ```sh
-npx falar init
+npx loqui init
 ```
 
-This walks you through choosing an engine, model, source locale, and target locales, then writes `.falar.json` to your project root.
+This walks you through choosing an engine, model, source locale, and target locales, then writes `.loqui.json` to your project root.
 
 **2. Set your API key:**
 
@@ -53,7 +53,7 @@ export GEMINI_API_KEY=your-key-here
 **3. Translate:**
 
 ```sh
-falar --input en.json --output ./i18n/{locale}.json --incremental
+loqui --input en.json --output ./i18n/{locale}.json --incremental
 ```
 
 ---
@@ -76,25 +76,25 @@ All fields are optional. CLI flags always override the config file.
 | `prompts`             | `{ system?, user? }`                | —                  | Custom prompt templates              |
 | `placeholderPatterns` | string[]                            | —                  | Extra regex patterns to protect      |
 
-Config file is auto-discovered as `.falar.json` in the current directory.
+Config file is auto-discovered as `.loqui.json` in the current directory.
 
 ---
 
 ## CLI
 
 ```
-falar init                    Interactive setup — creates .falar.json in the current directory
+loqui init                    Interactive setup — creates .loqui.json in the current directory
 
-falar [input] [options]
+loqui [input] [options]
 
 [input] — one of:
   --input <file>         read from a JSON file
   --input '<json>'       pass a JSON string inline
-  first positional arg   falar en.json --from en --to fr
-  stdin                  cat en.json | falar --from en --to fr
+  first positional arg   loqui en.json --from en --to fr
+  stdin                  cat en.json | loqui --from en --to fr
 
 Options:
-  --config <path>        Config file or directory (default: .falar.json in cwd)
+  --config <path>        Config file or directory (default: .loqui.json in cwd)
   --from <locale>        Source locale — overrides config.from
   --to <locale,...>      Target locale(s), comma-separated — overrides config.to
   --engine <name>        Engine: gemini | openai | anthropic — overrides config.engine
@@ -113,22 +113,22 @@ Options:
 
 ```sh
 # Translate a file, write per-locale files
-falar --input src/i18n/en.json --from en --to fr,de --output src/i18n/{locale}.json
+loqui --input src/i18n/en.json --from en --to fr,de --output src/i18n/{locale}.json
 
 # Pipe JSON through stdin, get JSON on stdout
-cat en.json | falar --from en --to ja
+cat en.json | loqui --from en --to ja
 
 # Inline JSON as a positional arg
-falar '{"hello":"Hello"}' --from en --to fr
+loqui '{"hello":"Hello"}' --from en --to fr
 
 # Incremental — only re-translate changed keys
-falar --input en.json --from en --to fr,de --output ./i18n/{locale}.json --incremental
+loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --incremental
 
 # Dry run — preview without any API calls or file writes
-falar --input en.json --from en --to fr --dry-run
+loqui --input en.json --from en --to fr --dry-run
 
 # Use a different engine and model
-falar --input en.json --from en --to fr --engine anthropic --model claude-opus-4-6
+loqui --input en.json --from en --to fr --engine anthropic --model claude-opus-4-6
 ```
 
 ---
@@ -136,7 +136,7 @@ falar --input en.json --from en --to fr --engine anthropic --model claude-opus-4
 ## Programmatic API
 
 ```typescript
-import { translate } from "falar";
+import { translate } from "loqui";
 
 const result = await translate({
   input: "./en.json", // file path or raw JSON string
@@ -162,7 +162,7 @@ interface TranslateOptions {
   force?: boolean; // re-translate all keys
   dryRun?: boolean; // no API calls or writes
   engine?: EngineAdapter; // custom engine instance
-  config?: Partial<FalarConfig>; // inline config overrides
+  config?: Partial<LoquiConfig>; // inline config overrides
   configPath?: string; // path to config file or directory
 }
 ```
@@ -180,7 +180,7 @@ If `output` is specified, files are written to disk and the same map is still re
 Translate multiple namespaces with a simple script:
 
 ```typescript
-import { translate } from "falar";
+import { translate } from "loqui";
 import { readdirSync } from "fs";
 import { join } from "path";
 
@@ -234,16 +234,16 @@ Patterns are regex strings. Custom patterns are applied before the built-ins.
 
 ## Incremental translation
 
-When `--incremental` is set (or `incremental: true` in the API), falar stores a hash of each source value next to the input file as `.{name}.falar-hash.json`. On subsequent runs, only keys whose source text changed (or that are missing from the target) are sent to the LLM.
+When `--incremental` is set (or `incremental: true` in the API), loqui stores a hash of each source value next to the input file as `.{name}.loqui-hash.json`. On subsequent runs, only keys whose source text changed (or that are missing from the target) are sent to the LLM.
 
 ```sh
-falar --input en.json --from en --to fr,de --output ./i18n/{locale}.json --incremental
+loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --incremental
 ```
 
 The hash file path can be customised:
 
 ```sh
-falar --input en.json --incremental --hash-file .cache/en.hash.json ...
+loqui --input en.json --incremental --hash-file .cache/en.hash.json ...
 ```
 
 ---
@@ -281,7 +281,7 @@ import {
   EngineAdapter,
   TranslationChunk,
   TranslationResult,
-} from "falar";
+} from "loqui";
 
 const myEngine: EngineAdapter = {
   async translateChunk(
@@ -309,10 +309,10 @@ await translate({ input: "en.json", from: "en", to: ["fr"], engine: myEngine });
 Or extend `BaseEngine` to reuse the built-in prompt builder and JSON response parser:
 
 ```typescript
-import { BaseEngine, FalarConfig, TranslationChunk } from "falar";
+import { BaseEngine, LoquiConfig, TranslationChunk } from "loqui";
 
 class MyEngine extends BaseEngine {
-  constructor(config: FalarConfig) {
+  constructor(config: LoquiConfig) {
     super(config);
   }
 

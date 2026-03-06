@@ -9,7 +9,7 @@
  *   npx ts-node examples/09-dry-run.ts
  */
 
-import { translate } from 'falar';
+import { translate } from '@mihairo/loqui';
 import { existsSync } from 'fs';
 import { join } from 'path';
 

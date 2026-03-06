@@ -1,17 +1,17 @@
 import fs from 'fs';
 import path from 'path';
-import { CONFIG_DEFAULTS, FalarConfig } from './types.js';
+import { CONFIG_DEFAULTS, LoquiConfig } from './types.js';
 
-const CONFIG_FILE = '.falar.json';
+const CONFIG_FILE = '.loqui.json';
 
 /**
  * Load config from:
  *   - a direct file path:  loadConfig('./configs/prod.json')
- *   - a directory to search: loadConfig('./project')  → finds .falar.json
+ *   - a directory to search: loadConfig('./project')  → finds .loqui.json
  *   - omitted: searches process.cwd()
  * Returns CONFIG_DEFAULTS if no file is found.
  */
-export function loadConfig(dirOrFile?: string): FalarConfig {
+export function loadConfig(dirOrFile?: string): LoquiConfig {
   if (!dirOrFile) return searchDir(process.cwd());
 
   const resolved = path.resolve(dirOrFile);
@@ -21,13 +21,13 @@ export function loadConfig(dirOrFile?: string): FalarConfig {
   return searchDir(resolved);
 }
 
-function searchDir(dir: string): FalarConfig {
+function searchDir(dir: string): LoquiConfig {
   const filePath = path.join(dir, CONFIG_FILE);
   if (fs.existsSync(filePath)) return parseFile(filePath);
   return { ...CONFIG_DEFAULTS };
 }
 
-function parseFile(filePath: string): FalarConfig {
+function parseFile(filePath: string): LoquiConfig {
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
@@ -35,12 +35,12 @@ function parseFile(filePath: string): FalarConfig {
     throw new Error(`Failed to parse '${filePath}': ${(e as Error).message}`);
   }
 
-  const config = { ...CONFIG_DEFAULTS, ...(raw as Partial<FalarConfig>) };
+  const config = { ...CONFIG_DEFAULTS, ...(raw as Partial<LoquiConfig>) };
   validateConfig(config, filePath);
   return config;
 }
 
-function validateConfig(config: FalarConfig, source: string): void {
+function validateConfig(config: LoquiConfig, source: string): void {
   if (!['gemini', 'openai', 'anthropic'].includes(config.engine)) {
     throw new Error(`'engine' must be one of: gemini, openai, anthropic. Got: '${config.engine}' in ${source}`);
   }

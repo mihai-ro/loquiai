@@ -2,10 +2,10 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { translateJson } from './translator.js';
 import { hashValue } from './hasher.js';
-import { EngineAdapter, FalarConfig, TranslationChunk, TranslationResult } from './types.js';
+import { EngineAdapter, LoquiConfig, TranslationChunk, TranslationResult } from './types.js';
 import { CONFIG_DEFAULTS } from './types.js';
 
-const config: FalarConfig = { ...CONFIG_DEFAULTS };
+const config: LoquiConfig = { ...CONFIG_DEFAULTS };
 
 /** Engine that uppercases every value — deterministic, no network calls. */
 function makeEngine(transform: (v: string) => string = (v) => v.toUpperCase()): EngineAdapter {

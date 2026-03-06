@@ -1,7 +1,7 @@
 {
-  "name": "falar",
+  "name": "@mihairo/loqui",
   "version": "1.0.0",
-  "description": "falar — i18n translation engine for software projects.",
+  "description": "loqui — i18n translation engine for software projects.",
   "keywords": [
     "i18n",
     "translation",
@@ -25,7 +25,7 @@
     "node": ">=22.0.0"
   },
   "bin": {
-    "falar": "dist/index.js"
+    "loqui": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -38,8 +38,8 @@
   },
   "files": [
     "dist",
-    ".falar.example.json",
-    "falar.schema.json",
+    ".loqui.example.json",
+    "loqui.schema.json",
     "README.md"
   ],
   "devDependencies": {

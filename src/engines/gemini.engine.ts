@@ -1,5 +1,5 @@
 import { BaseEngine } from './base.engine.js';
-import { TranslationChunk, TranslationResult, FalarConfig } from '../types.js';
+import { TranslationChunk, TranslationResult, LoquiConfig } from '../types.js';
 import { sleep, truncate } from './utils.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -8,7 +8,7 @@ const MAX_RETRIES = 5;
 export class GeminiEngine extends BaseEngine {
   private apiKey: string;
 
-  constructor(config: FalarConfig) {
+  constructor(config: LoquiConfig) {
     super(config);
     const key = process.env['GEMINI_API_KEY'];
     if (!key) throw new Error('GEMINI_API_KEY environment variable is not set.');

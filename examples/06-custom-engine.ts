@@ -2,7 +2,7 @@
  * 06-custom-engine.ts
  *
  * Provide your own LLM engine by implementing the EngineAdapter interface.
- * Useful when you want to use a provider not built into falar, or route
+ * Useful when you want to use a provider not built into loqui, or route
  * requests through your own proxy.
  *
  * This example uses a mock engine that uppercases every value, so you can
@@ -12,7 +12,7 @@
  *   npx ts-node examples/06-custom-engine.ts
  */
 
-import { translate, EngineAdapter, TranslationChunk, TranslationResult } from 'falar';
+import { translate, EngineAdapter, TranslationChunk, TranslationResult } from '@mihairo/loqui';
 
 const mockEngine: EngineAdapter = {
   async translateChunk(

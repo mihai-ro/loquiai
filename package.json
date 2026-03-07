@@ -1,6 +1,6 @@
 {
   "name": "@mihairo/loqui",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "loqui — i18n translation engine for software projects.",
   "repository": {
     "url": "https://github.com/mihai-ro/loquiai"

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/mihai-ro/loquiai/compare/loqui-v1.0.4...loqui-v1.0.5) (2026-03-10)
+
+
+### Performance Improvements
+
+* esbuild bundle ([#11](https://github.com/mihai-ro/loquiai/issues/11)) ([8deeb28](https://github.com/mihai-ro/loquiai/commit/8deeb28ec06608b56cefa791326dd9494a637a3f))
+
 ## [1.0.4](https://github.com/mihai-ro/loquiai/compare/loqui-v1.0.3...loqui-v1.0.4) (2026-03-10)
 
 

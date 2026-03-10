@@ -33,8 +33,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build.mjs",
     "build:watch": "tsc -p tsconfig.build.json --watch",
-    "test": "tsc && node --test 'dist/**/*.test.js'",
-    "test:watch": "node --test --watch 'dist/**/*.test.js'",
+    "test": "tsc -p tsconfig.test.json && node --test '.dist-test/**/*.test.js'",
+    "test:watch": "node --test --watch '.dist-test/**/*.test.js'",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm test && npm run clean && npm run build",
     "translate": "node dist/index.js"

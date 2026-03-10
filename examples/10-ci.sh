@@ -22,7 +22,7 @@ set -euo pipefail
 echo "==> Syncing i18n translations"
 
 # Run loqui — stderr captures warnings, exit code is non-zero on chunk failures
-npx loqui \
+npx @mihairo/loqui \
   --input src/assets/i18n/en.json \
   --from en \
   --to fr,de,es,ja,pt \

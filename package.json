@@ -31,7 +31,7 @@
     "loqui": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/build.mjs",
     "build:watch": "tsc -p tsconfig.build.json --watch",
     "test": "tsc && node --test 'dist/**/*.test.js'",
     "test:watch": "node --test --watch 'dist/**/*.test.js'",
@@ -47,6 +47,7 @@
   ],
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.27.3",
     "typescript": "^5.5.0"
   }
 }

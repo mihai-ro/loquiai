@@ -1,6 +1,9 @@
 # compiled output — published to npm via package.json "files", not tracked in git
 dist/
 
+# test compilation output — separate from dist to avoid polluting the build
+.dist-test/
+
 # dependencies
 node_modules/
 

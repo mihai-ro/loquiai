@@ -175,7 +175,7 @@ async function runInit(): Promise<void> {
   };
   if (context) config.context = context;
 
-  const json = JSON.stringify({ $schema: './node_modules/loqui/loqui.schema.json', ...config }, null, 2) + '\n';
+  const json = JSON.stringify({ $schema: './node_modules/@mihairo/loqui/loqui.schema.json', ...config }, null, 2) + '\n';
   fs.writeFileSync(configPath, json, 'utf-8');
 
   process.stdout.write(`\n  Created .loqui.json\n\n`);

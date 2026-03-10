@@ -3,7 +3,7 @@
 > i18n translation engine powered by LLMs. Feed it a JSON file, get back translated JSON. No accounts, no dashboards, no lock-in.
 
 ```sh
-npx loqui --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
+npx @mihairo/loqui --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
 ```
 
 ---
@@ -24,9 +24,9 @@ npx loqui --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
 ## Installation
 
 ```sh
-npm install loqui
+npm install @mihairo/loqui
 # or
-npm install -g loqui   # for the CLI globally
+npm install -g @mihairo/loqui   # for the CLI globally
 ```
 
 Requires **Node.js ≥ 22**.
@@ -38,7 +38,7 @@ Requires **Node.js ≥ 22**.
 **1. Create a config file interactively:**
 
 ```sh
-npx loqui init
+npx @mihairo/loqui init
 ```
 
 This walks you through choosing an engine, model, source locale, and target locales, then writes `.loqui.json` to your project root.
@@ -136,7 +136,7 @@ loqui --input en.json --from en --to fr --engine anthropic --model claude-opus-4
 ## Programmatic API
 
 ```typescript
-import { translate } from "loqui";
+import { translate } from "@mihairo/loqui";
 
 const result = await translate({
   input: "./en.json", // file path or raw JSON string
@@ -180,7 +180,7 @@ If `output` is specified, files are written to disk and the same map is still re
 Translate multiple namespaces with a simple script:
 
 ```typescript
-import { translate } from "loqui";
+import { translate } from "@mihairo/loqui";
 import { readdirSync } from "fs";
 import { join } from "path";
 
@@ -281,7 +281,7 @@ import {
   EngineAdapter,
   TranslationChunk,
   TranslationResult,
-} from "loqui";
+} from "@mihairo/loqui";
 
 const myEngine: EngineAdapter = {
   async translateChunk(
@@ -309,7 +309,7 @@ await translate({ input: "en.json", from: "en", to: ["fr"], engine: myEngine });
 Or extend `BaseEngine` to reuse the built-in prompt builder and JSON response parser:
 
 ```typescript
-import { BaseEngine, LoquiConfig, TranslationChunk } from "loqui";
+import { BaseEngine, LoquiConfig, TranslationChunk } from "@mihairo/loqui";
 
 class MyEngine extends BaseEngine {
   constructor(config: LoquiConfig) {

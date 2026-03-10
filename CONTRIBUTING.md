@@ -9,8 +9,8 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 ## Getting started
 
 ```sh
-git clone https://github.com/your-org/loqui.git
-cd loqui
+git clone https://github.com/mihai-ro/loquiai.git
+cd loquiai
 npm install
 npm run build
 npm test
@@ -22,8 +22,8 @@ npm test
 
 | Command | Description |
 |---------|-------------|
-| `npm run build` | Compile TypeScript → `dist/` |
-| `npm run build:watch` | Recompile on save |
+| `npm run build` | Emit type declarations (tsc) + bundle JS (esbuild) → `dist/` |
+| `npm run build:watch` | Watch and recompile type declarations on save |
 | `npm test` | Full test suite (compiles first) |
 | `npm run clean` | Remove `dist/` |
 
@@ -53,7 +53,7 @@ All source files live in `src/`. Tests use Node's built-in `node:test` runner �
 ## Reporting bugs
 
 Open a GitHub issue with:
-- loqui version (`npm list loqui`)
+- loqui version (`npm list @mihairo/loqui`)
 - Node.js version (`node --version`)
 - A minimal reproduction (input JSON + config + command)
 - The actual vs expected output

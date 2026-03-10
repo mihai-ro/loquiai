@@ -1,39 +1,39 @@
 #!/usr/bin/env node
 
-/**
- * loqui — i18n translation CLI
- *
- * Usage:
- *   loqui [input] [options]
- *
- *   [input] — one of:
- *     --input <file>         read from a JSON file
- *     --input '<json>'       pass a JSON string inline
- *     first positional arg   loqui '{"key":"val"}' --from en --to fr
- *     stdin                  cat en.json | loqui --from en --to fr
- *
- * Options:
- *   --config <path>        Config file or directory (default: .loqui.json in cwd)
- *   --from <locale>        Source locale — overrides config.from
- *   --to <locale,...>      Target locale(s), comma-separated — overrides config.to
- *   --engine <name>        Engine: gemini | openai | anthropic — overrides config.engine
- *   --model <name>         Model name — overrides config.model
- *   --context <text>       Domain context injected into prompts — overrides config.context
- *   --output <path>        Output path. Use {locale} token: ./i18n/{locale}.json
- *                          Or a plain directory: writes {dir}/{locale}.json
- *   --namespace <name>     Namespace label injected into translation prompts
- *   --incremental          Only translate new/changed keys (uses a hash sidecar)
- *   --hash-file <path>     Hash sidecar path (implies --incremental)
- *   --dry-run              Preview without calling the API or writing files
- *   --force                Re-translate all keys regardless of existing translations
- *
- * Inline options always override values from the config file.
- *
- * Environment variables:
- *   GEMINI_API_KEY      — required when engine = "gemini"
- *   OPENAI_API_KEY      — required when engine = "openai"
- *   ANTHROPIC_API_KEY   — required when engine = "anthropic"
- */
+const HELP_TEXT = `
+loqui — i18n translation CLI
+
+Usage:
+  loqui [input] [options]
+
+  [input] — one of:
+    --input <file>         read from a JSON file
+    --input '<json>'       pass a JSON string inline
+    first positional arg   loqui '{"key":"val"}' --from en --to fr
+    stdin                  cat en.json | loqui --from en --to fr
+
+Options:
+  --config <path>        Config file or directory (default: .loqui.json in cwd)
+  --from <locale>        Source locale — overrides config.from
+  --to <locale,...>      Target locale(s), comma-separated — overrides config.to
+  --engine <name>        Engine: gemini | openai | anthropic — overrides config.engine
+  --model <name>         Model name — overrides config.model
+  --context <text>       Domain context injected into prompts — overrides config.context
+  --output <path>        Output path. Use {locale} token: ./i18n/{locale}.json
+                         Or a plain directory: writes {dir}/{locale}.json
+  --namespace <name>     Namespace label injected into translation prompts
+  --incremental          Only translate new/changed keys (uses a hash sidecar)
+  --hash-file <path>     Hash sidecar path (implies --incremental)
+  --dry-run              Preview without calling the API or writing files
+  --force                Re-translate all keys regardless of existing translations
+
+Inline options always override values from the config file.
+
+Environment variables:
+  GEMINI_API_KEY      — required when engine = "gemini"
+  OPENAI_API_KEY      — required when engine = "openai"
+  ANTHROPIC_API_KEY   — required when engine = "anthropic"
+`.trim();
 
 import fs from 'fs';
 import path from 'path';
@@ -194,9 +194,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv);
 
   if (args.help) {
-    const src = await import('fs').then((fs) => fs.promises.readFile(__filename, 'utf-8').catch(() => ''));
-    const doc = src.match(/\/\*\*([\s\S]*?)\*\//)?.[1]?.replace(/^\s*\* ?/gm, '') ?? '';
-    process.stdout.write(doc.trim() + '\n');
+    process.stdout.write(HELP_TEXT + '\n');
     return;
   }
 

@@ -13,11 +13,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/assets/i18n/**/en.json'   # only run when source files change
-  workflow_dispatch:                    # allow manual trigger from the Actions tab
+      - "src/assets/i18n/**/en.json" # only run when source files change
+  workflow_dispatch: # allow manual trigger from the Actions tab
     inputs:
       force:
-        description: 'Re-translate all keys (ignore cache)'
+        description: "Re-translate all keys (ignore cache)"
         type: boolean
         default: false
 
@@ -32,15 +32,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Full history needed so git push works correctly
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies

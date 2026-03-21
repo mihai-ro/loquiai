@@ -93,12 +93,20 @@ export abstract class BaseEngine {
     for (const locale of targetLocales) {
       const localeData = parsed[locale];
       if (!localeData || typeof localeData !== 'object') {
+        process.stderr.write(
+          `\x1b[33m[❗️] Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty\x1b[0m\n`
+        );
         result[locale] = { keys: Object.fromEntries(expectedKeys.map((k) => [k, ''])) };
         continue;
       }
       const keys: Record<string, string> = {};
       for (const key of expectedKeys) {
         const val = (localeData as Record<string, unknown>)[key];
+        if (typeof val !== 'string') {
+          process.stderr.write(
+            `\x1b[33m[❗️] Engine response key "${key}" for locale "${locale}" is not a string (got ${typeof val}) — using empty string\x1b[0m\n`
+          );
+        }
         keys[key] = typeof val === 'string' ? val : '';
       }
       result[locale] = { keys };

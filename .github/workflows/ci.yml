@@ -9,6 +9,8 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # checks: write is needed by dorny/test-reporter to publish results
+  checks: write
 
 jobs:
   lint-pr-title:
@@ -46,4 +48,11 @@ jobs:
 
       - run: npm ci
       - run: npm audit --audit-level=high
-      - run: npm test
+      - run: npm run test:ci
+
+      - uses: dorny/test-reporter@v2.6.0
+        if: always()
+        with:
+          name: Test Results
+          path: test-results.xml
+          reporter: java-junit

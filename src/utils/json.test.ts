@@ -1,5 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import assertLoose from 'node:assert';
 import { flatten, unflatten, deepSortKeys } from './json.js';
 
 describe('flatten', () => {
@@ -27,19 +28,19 @@ describe('flatten', () => {
 describe('unflatten', () => {
   test('rebuilds nested structure from dot-notation keys', () => {
     const result = unflatten({ 'a.b.c': 'val' });
-    assert.deepEqual(result, { a: { b: { c: 'val' } } });
+    assertLoose.deepEqual(result, { a: { b: { c: 'val' } } });
   });
 
   test('handles sibling keys at same depth', () => {
     const result = unflatten({ 'a.x': '1', 'a.y': '2' });
-    assert.deepEqual(result, { a: { x: '1', y: '2' } });
+    assertLoose.deepEqual(result, { a: { x: '1', y: '2' } });
   });
 });
 
 describe('flatten / unflatten roundtrip', () => {
   test('roundtrips deeply nested objects', () => {
     const original = { greetings: { formal: 'Good day', casual: { morning: 'Hey', evening: 'Hi' } } };
-    assert.deepEqual(unflatten(flatten(original)), original);
+    assertLoose.deepEqual(unflatten(flatten(original)), original);
   });
 });
 

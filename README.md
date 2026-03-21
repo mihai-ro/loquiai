@@ -1,6 +1,11 @@
-# loqui
+<p align="center">
+  <img src="assets/logo.png" alt="loqui" width="720" />
+</p>
 
-> i18n translation engine powered by LLMs. Feed it a JSON file, get back translated JSON. No accounts, no dashboards, no lock-in.
+<p align="center">
+  i18n translation engine powered by LLMs. Feed it a JSON file, get back translated JSON.<br/>
+  No accounts, no dashboards, no lock-in.
+</p>
 
 ```sh
 npx @mihairo/loqui --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json

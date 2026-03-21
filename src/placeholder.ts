@@ -1,7 +1,21 @@
 const MASK_PREFIX = '⟦';
 const MASK_SUFFIX = '⟧';
+const REGEX_CACHE_MAX = 128;
 
-// Module-level cache — compiled once per unique pattern string, reused across all calls.
+function lruGet<K, V>(cache: Map<K, V>, key: K): V | undefined {
+  if (!cache.has(key)) return undefined;
+  const val = cache.get(key)!;
+  cache.delete(key);
+  cache.set(key, val);
+  return val;
+}
+
+function lruSet<K, V>(cache: Map<K, V>, key: K, val: V, max: number): void {
+  if (cache.has(key)) cache.delete(key);
+  else if (cache.size >= max) cache.delete(cache.keys().next().value!);
+  cache.set(key, val);
+}
+
 const customRegexCache = new Map<string, RegExp>();
 
 export interface MaskResult {
@@ -22,15 +36,18 @@ export function maskPlaceholders(input: string, customPatterns?: string[]): Mask
 
   // user-defined patterns applied first (most specific)
   // Compiled regex objects are cached so repeated calls don't recompile on every key.
-  for (const pattern of customPatterns ?? []) {
-    let re = customRegexCache.get(pattern);
+  for (let idx = 0; idx < (customPatterns ?? []).length; idx++) {
+    const pattern = customPatterns![idx];
+    let re = lruGet(customRegexCache, pattern);
     if (!re) {
       try {
         re = new RegExp(pattern, 'g');
       } catch {
-        throw new Error(`Invalid placeholder pattern: ${JSON.stringify(pattern)}`);
+        throw new Error(
+          `Invalid placeholder pattern at config.placeholderPatterns[${idx}]: ${JSON.stringify(pattern)}`
+        );
       }
-      customRegexCache.set(pattern, re);
+      lruSet(customRegexCache, pattern, re, REGEX_CACHE_MAX);
     }
     re.lastIndex = 0;
     result = result.replace(re, (match) => mask(match));

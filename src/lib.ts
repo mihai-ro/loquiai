@@ -59,8 +59,25 @@ export interface TranslateOptions {
 
 /**
  * Translate a JSON file or string into one or more target locales.
- * Returns a map of locale → JSON string.
- * If `output` is specified, also writes those strings to the given paths.
+ *
+ * @param options - Translation options. `input`, `from`, and `to` are required
+ *   (either directly or via a loaded config file).
+ * @returns A map of `locale → JSON string` with the translated content.
+ *   If `output` is specified, files are also written to disk.
+ * @throws If `from` or `to` are not provided (directly or via config).
+ * @throws If the input cannot be parsed as JSON.
+ * @throws If any translation chunk fails after all retries.
+ *
+ * @example
+ * import { translate } from '@mihairo/loqui';
+ *
+ * const results = await translate({
+ *   input: './en.json',
+ *   from: 'en',
+ *   to: ['fr', 'de'],
+ *   output: './i18n/{locale}.json',
+ *   incremental: true,
+ * });
  */
 export async function translate(options: TranslateOptions): Promise<Record<string, string>> {
   const fileConfig = loadConfig(options.configPath);

@@ -40,7 +40,7 @@ import path from 'path';
 import { createInterface } from 'readline/promises';
 import { translate } from './lib.js';
 import { logger } from './utils/logger.js';
-import { LoquiConfig, CONFIG_DEFAULTS } from './types.js';
+import { LoquiConfig, CONFIG_DEFAULTS, DEFAULT_MODELS, SupportedEngine } from './types.js';
 
 const VALUE_FLAGS = new Set([
   '--input', '--config', '--from', '--to',
@@ -109,12 +109,6 @@ function readStdin(): Promise<string> {
   });
 }
 
-const DEFAULT_MODEL: Record<string, string> = {
-  gemini: 'gemini-2.5-flash',
-  openai: 'gpt-4o',
-  anthropic: 'claude-sonnet-4-6',
-};
-
 const API_KEY_VAR: Record<string, string> = {
   gemini: 'GEMINI_API_KEY',
   openai: 'OPENAI_API_KEY',
@@ -154,7 +148,7 @@ async function runInit(): Promise<void> {
     process.exit(1);
   }
 
-  const defaultModel = DEFAULT_MODEL[engine];
+  const defaultModel = DEFAULT_MODELS[engine as SupportedEngine] ?? 'gemini-2.5-flash';
   const model = await ask(`  Model (${defaultModel}): `, defaultModel);
   const from = await ask('  Source locale (en): ', 'en');
   const toRaw = await ask('  Target locales, comma-separated (fr,de,es): ', 'fr,de,es');

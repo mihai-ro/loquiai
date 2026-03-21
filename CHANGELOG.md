@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/mihai-ro/loquiai/compare/loqui-v1.0.5...loqui-v1.1.0) (2026-03-21)
+
+
+### Features
+
+* second run fresh eyes ([#16](https://github.com/mihai-ro/loquiai/issues/16)) ([59ad7fd](https://github.com/mihai-ro/loquiai/commit/59ad7fd278bf9a18053460ddb2c0860d64040b61))
+
 ## [1.0.5](https://github.com/mihai-ro/loquiai/compare/loqui-v1.0.4...loqui-v1.0.5) (2026-03-10)
 
 

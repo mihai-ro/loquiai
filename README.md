@@ -347,11 +347,46 @@ await translate({
 
 ## Environment variables
 
-| Variable            | Required for          |
-| ------------------- | --------------------- |
-| `GEMINI_API_KEY`    | `engine: "gemini"`    |
-| `OPENAI_API_KEY`    | `engine: "openai"`    |
-| `ANTHROPIC_API_KEY` | `engine: "anthropic"` |
+| Variable               | Required for          |
+| ---------------------- | --------------------- |
+| `GEMINI_API_KEY`       | `engine: "gemini"`    |
+| `OPENAI_API_KEY`       | `engine: "openai"`    |
+| `ANTHROPIC_API_KEY`    | `engine: "anthropic"` |
+| `ANTHROPIC_API_VERSION` | Override Anthropic API version (default: `2023-06-01`) |
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `GEMINI_API_KEY environment variable is not set` | Missing env var | Export the correct key for your engine |
+| `'from' (source locale) is required` | No `from` in options or config | Add `from` to `.loqui.json` or pass `--from` |
+| Empty translation strings in output | LLM response missing keys | Try reducing `splitToken`, check model availability |
+| `Engine returned invalid JSON` | LLM returned non-JSON | Try a more capable model, or add `context` to help the LLM |
+| `429` rate limit errors | Too many concurrent requests | Reduce `concurrency` in config (default: 8) |
+| Keys not re-translated after source changes | Hash file has stale values | Run with `--force` once to reset, or delete the `.loqui-hash.json` sidecar |
+| `Failed to parse '.loqui.json'` | Syntax error in config | Validate the JSON at jsonlint.com or similar |
+
+## Performance Tuning
+
+### `splitToken` (default: 4000)
+
+Controls how many source keys are bundled into a single LLM request. Higher = fewer requests (faster, cheaper) but risks hitting model context limits. Lower = safer for models with small context windows.
+
+- **4000** — Recommended for Flash/GPT-4o-mini tier models
+- **12000+** — Recommended for Pro/GPT-4o tier models
+
+### `concurrency` (default: 8)
+
+Number of simultaneous API requests. Higher = faster for large files but risks rate limits.
+
+- Reduce to 3–4 if you see frequent 429s
+- Free-tier API keys: use 1–2
+
+### `--incremental`
+
+Always use this flag for repeated runs. Skips unchanged keys entirely. On a 1000-key file where only 10 keys changed, you pay for 10 keys, not 1000.
 
 ---
 

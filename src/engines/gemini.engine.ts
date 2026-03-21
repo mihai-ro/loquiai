@@ -1,6 +1,6 @@
 import { BaseEngine } from './base.engine.js';
 import { TranslationChunk, TranslationResult, LoquiConfig } from '../types.js';
-import { sleep, truncate } from './utils.js';
+import { truncate, fetchWithRetry } from './utils.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const MAX_RETRIES = 5;
@@ -35,45 +35,30 @@ export class GeminiEngine extends BaseEngine {
       },
     };
 
-    let attempt = 0;
-    while (true) {
-      const response = await fetch(url, {
+    const response = await fetchWithRetry(
+      url,
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
         body: JSON.stringify(body),
-      });
-
-      if (response.status === 429) {
-        if (attempt >= MAX_RETRIES) {
-          throw new Error(
-            `Gemini API 429 after ${MAX_RETRIES} retries. Upgrade to a paid API key or reduce concurrency.`
-          );
-        }
-        const waitMs = await parseRetryDelay(response);
-        process.stderr.write(
-          `\x1b[2m [retry] 429 — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${MAX_RETRIES})...\x1b[0m\n`
-        );
-        await sleep(waitMs);
-        attempt++;
-        continue;
+      },
+      {
+        engineName: 'Gemini',
+        maxRetries: MAX_RETRIES,
+        timeoutMs: this.config.timeout ?? 120_000,
+        parseRetryDelay: parseGeminiRetryDelay,
       }
+    );
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Gemini API error ${response.status}: ${errorText}`);
-      }
+    const data = (await response.json()) as GeminiResponse;
+    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!raw) throw new Error(`Gemini returned empty response: ${truncate(JSON.stringify(data))}`);
 
-      const data = (await response.json()) as GeminiResponse;
-      const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!raw) throw new Error(`Gemini returned empty response: ${truncate(JSON.stringify(data))}`);
-
-      return this.parseResponse(raw, expectedKeys, targetLocales);
-    }
+    return this.parseResponse(raw, expectedKeys, targetLocales);
   }
 }
 
-async function parseRetryDelay(response: Response): Promise<number> {
-  const fallback = 60_000;
+async function parseGeminiRetryDelay(response: Response): Promise<number | null> {
   try {
     const body = (await response.json()) as GeminiErrorResponse;
     const retryInfo = body?.error?.details?.find((d) => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
@@ -82,9 +67,9 @@ async function parseRetryDelay(response: Response): Promise<number> {
       if (!isNaN(seconds)) return seconds * 1000 + 500;
     }
   } catch {
-    /* use fallback */
+    /* no server delay */
   }
-  return fallback;
+  return null;
 }
 
 interface GeminiResponse {

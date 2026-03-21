@@ -21,10 +21,10 @@ export function flatten(obj: Record<string, unknown>, prefix = '', result: FlatT
  * unflattens dot-notation keys back into a nested object.
  * { "A.B": "val" } → { A: { B: "val" } }
  */
-const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', 'toJSON']);
 
 export function unflatten(flat: FlatTranslations): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
+  const result: Record<string, unknown> = Object.create(null);
   for (const [flatKey, value] of Object.entries(flat)) {
     const parts = flatKey.split('.');
     if (parts.some((p) => UNSAFE_KEYS.has(p))) continue;
@@ -32,7 +32,7 @@ export function unflatten(flat: FlatTranslations): Record<string, unknown> {
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
       if (typeof cursor[part] !== 'object' || cursor[part] === null) {
-        cursor[part] = {};
+        cursor[part] = Object.create(null);
       }
       cursor = cursor[part] as Record<string, unknown>;
     }

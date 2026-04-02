@@ -1,25 +1,22 @@
+import type { LoquiConfig, TranslationChunk, TranslationResult } from '../types.js';
 import { BaseEngine } from './base.engine.js';
-import { TranslationChunk, TranslationResult, LoquiConfig } from '../types.js';
-import { truncate, fetchWithRetry } from './utils.js';
+import { fetchWithRetry, sanitizeForDisplay } from './utils.js';
 
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const MAX_RETRIES = 5;
 
 export class OpenAIEngine extends BaseEngine {
-  private apiKey: string;
-
   constructor(config: LoquiConfig) {
-    super(config);
-    const key = process.env['OPENAI_API_KEY'];
-    if (!key) throw new Error('OPENAI_API_KEY environment variable is not set.');
-    this.apiKey = key;
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is not set.');
+    super(config, apiKey);
   }
 
   async translateChunk(
     chunk: TranslationChunk,
     targetLocales: string[],
     sourceLocale: string,
-    namespace: string
+    namespace: string,
   ): Promise<Record<string, TranslationResult>> {
     const expectedKeys = Object.keys(chunk.keys);
     const systemPrompt = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
@@ -41,7 +38,7 @@ export class OpenAIEngine extends BaseEngine {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.getApiKey()}`,
         },
         body: JSON.stringify(body),
       },
@@ -49,12 +46,12 @@ export class OpenAIEngine extends BaseEngine {
         engineName: 'OpenAI',
         maxRetries: MAX_RETRIES,
         timeoutMs: this.config.timeout ?? 120_000,
-      }
+      },
     );
 
     const data = (await response.json()) as OpenAIResponse;
     const raw = data?.choices?.[0]?.message?.content;
-    if (!raw) throw new Error(`OpenAI returned empty response: ${truncate(JSON.stringify(data))}`);
+    if (!raw) throw new Error(`OpenAI returned empty response: ${sanitizeForDisplay(JSON.stringify(data))}`);
 
     return this.parseResponse(raw, expectedKeys, targetLocales);
   }

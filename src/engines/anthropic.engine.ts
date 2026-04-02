@@ -1,6 +1,6 @@
+import type { LoquiConfig, TranslationChunk, TranslationResult } from '../types.js';
 import { BaseEngine } from './base.engine.js';
-import { TranslationChunk, TranslationResult, LoquiConfig } from '../types.js';
-import { truncate, fetchWithRetry } from './utils.js';
+import { fetchWithRetry, sanitizeForDisplay } from './utils.js';
 
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1';
 const DEFAULT_ANTHROPIC_API_VERSION = '2023-06-01';
@@ -8,26 +8,23 @@ const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const MAX_RETRIES = 5;
 
 export class AnthropicEngine extends BaseEngine {
-  private apiKey: string;
-
   constructor(config: LoquiConfig) {
-    super(config);
-    const key = process.env['ANTHROPIC_API_KEY'];
-    if (!key) throw new Error('ANTHROPIC_API_KEY environment variable is not set.');
-    this.apiKey = key;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is not set.');
+    super(config, apiKey);
   }
 
   async translateChunk(
     chunk: TranslationChunk,
     targetLocales: string[],
     sourceLocale: string,
-    namespace: string
+    namespace: string,
   ): Promise<Record<string, TranslationResult>> {
     const expectedKeys = Object.keys(chunk.keys);
     const systemPrompt = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
     const userPrompt = this.buildUserPrompt(chunk, targetLocales, sourceLocale);
     const model = this.config.model || DEFAULT_MODEL;
-    const apiVersion = process.env['ANTHROPIC_API_VERSION'] ?? DEFAULT_ANTHROPIC_API_VERSION;
+    const apiVersion = process.env.ANTHROPIC_API_VERSION ?? DEFAULT_ANTHROPIC_API_VERSION;
 
     const body = {
       model,
@@ -44,7 +41,7 @@ export class AnthropicEngine extends BaseEngine {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
+          'x-api-key': this.getApiKey(),
           'anthropic-version': apiVersion,
         },
         body: JSON.stringify(body),
@@ -53,12 +50,12 @@ export class AnthropicEngine extends BaseEngine {
         engineName: 'Anthropic',
         maxRetries: MAX_RETRIES,
         timeoutMs: this.config.timeout ?? 120_000,
-      }
+      },
     );
 
     const data = (await response.json()) as AnthropicResponse;
     const raw = data?.content?.[0]?.text;
-    if (!raw) throw new Error(`Anthropic returned empty response: ${truncate(JSON.stringify(data))}`);
+    if (!raw) throw new Error(`Anthropic returned empty response: ${sanitizeForDisplay(JSON.stringify(data))}`);
 
     return this.parseResponse(raw, expectedKeys, targetLocales);
   }

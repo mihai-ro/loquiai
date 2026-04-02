@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/mihai-ro/loquiai/compare/loqui-v2.0.0...loqui-v3.0.0) (2026-04-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* Requires Node 20+. Package now exports both ESM and CJS formats.
+
+### Miscellaneous
+
+* v2 engine standards p2 ([#21](https://github.com/mihai-ro/loquiai/issues/21)) ([3e96f80](https://github.com/mihai-ro/loquiai/commit/3e96f807cbb329f368c9b95f564d6be08426a683))
+
 ## [2.0.0](https://github.com/mihai-ro/loquiai/compare/loqui-v1.1.0...loqui-v2.0.0) (2026-04-02)
 
 

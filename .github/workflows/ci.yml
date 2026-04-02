@@ -13,6 +13,20 @@ permissions:
   checks: write
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: ".node-version"
+          cache: "npm"
+
+      - run: npm ci
+      - run: npm run lint
+
   lint-pr-title:
     name: Lint PR title
     if: github.event_name == 'pull_request'
@@ -37,6 +51,7 @@ jobs:
 
   test:
     name: Build & Test
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

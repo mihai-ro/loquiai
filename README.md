@@ -3,6 +3,13 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/@mihairo/loqui"><img src="https://img.shields.io/npm/v/@mihairo/loqui" alt="npm version" /></a>
+  <a href="https://github.com/mihai-ro/loquiai/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mihai-ro/loquiai/ci.yml?label=ci" alt="CI status" /></a>
+  <a href="https://github.com/mihai-ro/loquiai/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@mihairo/loqui" alt="License" /></a>
+  <a href="https://www.npmjs.com/package/@mihairo/loqui"><img src="https://img.shields.io/npm/dm/@mihairo/loqui" alt="npm downloads" /></a>
+</p>
+
+<p align="center">
   i18n translation engine powered by LLMs. Feed it a JSON file, get back translated JSON.<br/>
   No accounts, no dashboards, no lock-in.
 </p>
@@ -392,6 +399,45 @@ Number of simultaneous API requests. Higher = faster for large files but risks r
 ### `--incremental`
 
 Always use this flag for repeated runs. Skips unchanged keys entirely. On a 1000-key file where only 10 keys changed, you pay for 10 keys, not 1000.
+
+---
+
+## GitHub Actions
+
+Integrate loqui into your CI pipeline to automatically translate i18n files on push.
+
+### Example workflow
+
+```yaml
+name: Translate i18n
+
+on:
+  push:
+    paths: ['src/i18n/en.json']
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - run: npx @mihairo/loqui --input src/i18n/en.json --from en --to fr,de,es --output src/i18n/{locale}.json --incremental
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - uses: peter-evans/create-pull-request@v6
+        with:
+          title: 'chore: update i18n translations'
+          commit-message: 'chore: update i18n translations'
+          branch: i18n/update
+```
+
+### Create your own action
+
+A standalone GitHub Action reference is available at [.github/actions/loqui/action.yml](.github/actions/loqui/action.yml) for use in other repositories.
 
 ---
 

@@ -1,5 +1,5 @@
-import fs from 'fs';
-import { FlatTranslations } from '../types.js';
+import fs from 'node:fs';
+import type { FlatTranslations } from '../types.js';
 
 /**
  * flattens a nested JSON object into dot-notation keys.
@@ -7,7 +7,7 @@ import { FlatTranslations } from '../types.js';
  */
 export function flatten(obj: Record<string, unknown>, prefix = '', result: FlatTranslations = {}): FlatTranslations {
   for (const [key, value] of Object.entries(obj)) {
-    const flatKey = prefix ? prefix + '.' + key : key;
+    const flatKey = prefix ? `${prefix}.${key}` : key;
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       flatten(value as Record<string, unknown>, flatKey, result);
     } else {
@@ -67,6 +67,5 @@ export function readJson(filePath: string): Record<string, unknown> {
 
 /** writes an object to a JSON file with 2-space indentation and a trailing newline. */
 export function writeJson(filePath: string, data: Record<string, unknown>): void {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
 }
-

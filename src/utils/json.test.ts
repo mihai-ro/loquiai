@@ -1,7 +1,7 @@
-import { describe, test } from 'node:test';
-import assert from 'node:assert/strict';
 import assertLoose from 'node:assert';
-import { flatten, unflatten, deepSortKeys } from './json.js';
+import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
+import { deepSortKeys, flatten, unflatten } from './json.js';
 
 describe('flatten', () => {
   test('flattens a nested object to dot-notation keys', () => {
@@ -16,7 +16,7 @@ describe('flatten', () => {
 
   test('coerces null to empty string', () => {
     const result = flatten({ key: null } as never);
-    assert.equal(result['key'], '');
+    assert.equal(result.key, '');
   });
 
   test('leaves already-flat objects unchanged', () => {
@@ -48,7 +48,6 @@ describe('deepSortKeys', () => {
   test('sorts keys alphabetically at every level', () => {
     const result = deepSortKeys({ z: '1', a: '2', m: { q: '3', b: '4' } });
     assert.deepEqual(Object.keys(result), ['a', 'm', 'z']);
-    assert.deepEqual(Object.keys(result['m'] as object), ['b', 'q']);
+    assert.deepEqual(Object.keys(result.m as object), ['b', 'q']);
   });
 });
-

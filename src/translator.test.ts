@@ -1,9 +1,14 @@
-import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { translateJson } from './translator.js';
+import { describe, test } from 'node:test';
 import { hashValue } from './hasher.js';
-import { EngineAdapter, LoquiConfig, TranslationChunk, TranslationResult } from './types.js';
-import { CONFIG_DEFAULTS } from './types.js';
+import { translateJson } from './translator.js';
+import {
+  CONFIG_DEFAULTS,
+  type EngineAdapter,
+  type LoquiConfig,
+  type TranslationChunk,
+  type TranslationResult,
+} from './types.js';
 
 const config: LoquiConfig = { ...CONFIG_DEFAULTS };
 
@@ -57,7 +62,7 @@ describe('translateJson — placeholder validation', () => {
     });
 
     // Broken translation must NOT overwrite the existing one
-    assert.equal(translations['fr']['desc'], 'existing translation');
+    assert.equal(translations.fr.desc, 'existing translation');
     // Warning must be emitted
     assert.ok(stats.warnings.some((w) => w.includes('desc') && w.includes('${GLOSSARY.USER_PLURAL}')));
   });
@@ -75,7 +80,7 @@ describe('translateJson — placeholder validation', () => {
       engine: makeEngine((v) => `Bonjour ${v.match(/⟦\d+⟧/)?.[0] ?? ''}`),
     });
 
-    assert.ok(translations['fr']['desc']?.includes('${name}'));
+    assert.ok(translations.fr.desc?.includes('${name}'));
     assert.equal(stats.warnings.filter((w) => w.includes('missing placeholders')).length, 0);
   });
 });
@@ -92,13 +97,13 @@ describe('translateJson — hash generation', () => {
       engine: makeEngine(),
     });
 
-    assert.equal(updatedHashStore['greeting'], hashValue('Hello'));
-    assert.equal(updatedHashStore['bye'], hashValue('Goodbye'));
+    assert.equal(updatedHashStore.greeting, hashValue('Hello'));
+    assert.equal(updatedHashStore.bye, hashValue('Goodbye'));
   });
 
   test('hashes are saved even when nothing needs translating (all keys already exist, no hash previously stored)', async () => {
     const source = { greeting: 'Hello' };
-    const existing = { fr: { greeting: 'Bonjour' } };  // already translated, no hash stored yet
+    const existing = { fr: { greeting: 'Bonjour' } }; // already translated, no hash stored yet
 
     const { updatedHashStore } = await translateJson({
       sourceFlat: source,
@@ -111,7 +116,7 @@ describe('translateJson — hash generation', () => {
     });
 
     // Hash must be written even though nothing was translated
-    assert.equal(updatedHashStore['greeting'], hashValue('Hello'));
+    assert.equal(updatedHashStore.greeting, hashValue('Hello'));
   });
 
   test('hashes are saved after --force run', async () => {
@@ -129,13 +134,13 @@ describe('translateJson — hash generation', () => {
       engine: makeEngine(),
     });
 
-    assert.equal(updatedHashStore['greeting'], hashValue('Hello'));
+    assert.equal(updatedHashStore.greeting, hashValue('Hello'));
   });
 
   test('changed source key is re-translated on second run', async () => {
-    const source = { greeting: 'Hello!' };  // changed
+    const source = { greeting: 'Hello!' }; // changed
     const existing = { fr: { greeting: 'Bonjour' } };
-    const hashStore = { greeting: hashValue('Hello') };  // hash from previous value
+    const hashStore = { greeting: hashValue('Hello') }; // hash from previous value
 
     const { translations } = await translateJson({
       sourceFlat: source,
@@ -149,7 +154,7 @@ describe('translateJson — hash generation', () => {
     });
 
     // Key was changed, so it should be re-translated
-    assert.equal(translations['fr']['greeting'], 'HELLO!');
+    assert.equal(translations.fr.greeting, 'HELLO!');
   });
 
   test('unchanged source key is NOT re-translated when hash matches', async () => {
@@ -169,7 +174,7 @@ describe('translateJson — hash generation', () => {
 
     const source = { greeting: 'Hello' };
     const existing = { fr: { greeting: 'Bonjour' } };
-    const hashStore = { greeting: hashValue('Hello') };  // hash matches current source
+    const hashStore = { greeting: hashValue('Hello') }; // hash matches current source
 
     await translateJson({
       sourceFlat: source,
@@ -206,12 +211,12 @@ describe('translateJson — hash generation', () => {
       to: ['fr'],
       namespace: 'test',
       config,
-      existing: { fr: run1.translations['fr'] },
+      existing: { fr: run1.translations.fr },
       hashStore: run1.updatedHashStore,
       engine: makeEngine(),
     });
 
-    assert.equal(run2.updatedHashStore['greeting'], hashValue('Hello!'));
-    assert.notEqual(run2.updatedHashStore['greeting'], run1.updatedHashStore['greeting']);
+    assert.equal(run2.updatedHashStore.greeting, hashValue('Hello!'));
+    assert.notEqual(run2.updatedHashStore.greeting, run1.updatedHashStore.greeting);
   });
 });

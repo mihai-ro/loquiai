@@ -1,6 +1,7 @@
 {
   "name": "@mihairo/loqui",
   "version": "1.1.0",
+  "type": "module",
   "description": "loqui — i18n translation engine for software projects.",
   "repository": {
     "url": "https://github.com/mihai-ro/loquiai"
@@ -16,28 +17,37 @@
     "name": "Mihai Ro"
   },
   "license": "Apache-2.0",
-  "main": "dist/lib.js",
   "exports": {
     ".": {
-      "require": "./dist/lib.js",
-      "import": "./dist/lib.js"
+      "import": "./dist/lib.js",
+      "require": "./dist/lib.cjs"
     },
-    "./cli": "./dist/index.js"
+    "./cli": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
   },
+  "main": "./dist/lib.cjs",
+  "module": "./dist/lib.js",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=20.0.0"
   },
   "bin": {
     "loqui": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/build.mjs",
+    "build": "pnpm clean && tsc -p tsconfig.build.json && node scripts/build.mjs",
     "build:watch": "tsc -p tsconfig.build.json --watch",
     "test": "tsc -p tsconfig.test.json && node --test '.dist-test/**/*.test.js'",
-    "test:ci": "tsc -p tsconfig.test.json && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml '.dist-test/**/*.test.js'",
+    "test:ci": "tsc -p tsconfig.test.json && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml .dist-test/",
+    "test:coverage": "tsc -p tsconfig.test.json && c8 node --test '.dist-test/**/*.test.js'",
     "test:watch": "node --test --watch '.dist-test/**/*.test.js'",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm test && npm run clean && npm run build",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --fix src/",
+    "format": "biome format src/",
+    "format:fix": "biome format --write src/",
+    "prepublishOnly": "pnpm test && pnpm clean && pnpm build",
     "translate": "node dist/index.js"
   },
   "files": [
@@ -47,7 +57,9 @@
     "README.md"
   ],
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@biomejs/biome": "^2.4.10",
+    "@types/node": "^20.0.0",
+    "c8": "^11.0.0",
     "esbuild": "^0.27.3",
     "typescript": "^5.5.0"
   }

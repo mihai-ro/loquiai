@@ -24,7 +24,11 @@ Options:
   --namespace <name>     Namespace label injected into translation prompts
   --incremental          Only translate new/changed keys (uses a hash sidecar)
   --hash-file <path>     Hash sidecar path (implies --incremental)
+  --glossary             Enable translation memory (uses a glossary sidecar)
+  --glossary-file <path> Glossary sidecar path (implies --glossary)
   --dry-run              Preview without calling the API or writing files
+  --diff                 Compare source against existing locales, report changes
+  --validate             Validate that target locales have the same keys as source
   --force                Re-translate all keys regardless of existing translations
 
 Inline options always override values from the config file.
@@ -35,17 +39,25 @@ Environment variables:
   ANTHROPIC_API_KEY   — required when engine = "anthropic"
 `.trim();
 
-import fs from 'fs';
-import path from 'path';
-import { createInterface } from 'readline/promises';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { translate } from './lib.js';
+import { CONFIG_DEFAULTS, DEFAULT_MODELS, type LoquiConfig, type SupportedEngine } from './types.js';
 import { logger } from './utils/logger.js';
-import { LoquiConfig, CONFIG_DEFAULTS, DEFAULT_MODELS, SupportedEngine } from './types.js';
 
 const VALUE_FLAGS = new Set([
-  '--input', '--config', '--from', '--to',
-  '--engine', '--model', '--context',
-  '--output', '--namespace', '--hash-file',
+  '--input',
+  '--config',
+  '--from',
+  '--to',
+  '--engine',
+  '--model',
+  '--context',
+  '--output',
+  '--namespace',
+  '--hash-file',
+  '--glossary-file',
 ]);
 
 interface Args {
@@ -59,8 +71,12 @@ interface Args {
   output: string | null;
   namespace: string | null;
   hashFile: string | null;
+  glossaryFile: string | null;
   incremental: boolean;
+  glossary: boolean;
   dryRun: boolean;
+  diff: boolean;
+  validate: boolean;
   force: boolean;
   help: boolean;
 }
@@ -92,8 +108,12 @@ function parseArgs(argv: string[]): Args {
     output: flags['--output'] ?? null,
     namespace: flags['--namespace'] ?? null,
     hashFile: flags['--hash-file'] ?? null,
+    glossaryFile: flags['--glossary-file'] ?? null,
     incremental: '--incremental' in flags,
+    glossary: '--glossary' in flags,
     dryRun: '--dry-run' in flags,
+    diff: '--diff' in flags,
+    validate: '--validate' in flags,
     force: '--force' in flags,
     help: '--help' in flags || '-h' in flags,
   };
@@ -139,7 +159,7 @@ async function runInit(): Promise<void> {
     }
   }
 
-  process.stdout.write('\n  Welcome to loqui — let\'s set up your config.\n\n');
+  process.stdout.write("\n  Welcome to loqui — let's set up your config.\n\n");
 
   const engine = await ask('  Engine [gemini / openai / anthropic] (gemini): ', 'gemini');
   if (!['gemini', 'openai', 'anthropic'].includes(engine)) {
@@ -152,7 +172,10 @@ async function runInit(): Promise<void> {
   const model = await ask(`  Model (${defaultModel}): `, defaultModel);
   const from = await ask('  Source locale (en): ', 'en');
   const toRaw = await ask('  Target locales, comma-separated (fr,de,es): ', 'fr,de,es');
-  const to = toRaw.split(',').map((s) => s.trim()).filter(Boolean);
+  const to = toRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const context = await ask('  Project context — helps the LLM pick the right tone (optional): ', '');
 
   rl.close();
@@ -169,7 +192,7 @@ async function runInit(): Promise<void> {
   };
   if (context) config.context = context;
 
-  const json = JSON.stringify({ $schema: './node_modules/@mihairo/loqui/loqui.schema.json', ...config }, null, 2) + '\n';
+  const json = `${JSON.stringify({ $schema: './node_modules/@mihairo/loqui/loqui.schema.json', ...config }, null, 2)}\n`;
   fs.writeFileSync(configPath, json, 'utf-8');
 
   process.stdout.write(`\n  Created .loqui.json\n\n`);
@@ -188,7 +211,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv);
 
   if (args.help) {
-    process.stdout.write(HELP_TEXT + '\n');
+    process.stdout.write(`${HELP_TEXT}\n`);
     return;
   }
 
@@ -224,15 +247,23 @@ async function main(): Promise<void> {
     output: args.output ?? undefined,
     namespace: args.namespace ?? undefined,
     hashFile: args.hashFile ?? undefined,
+    glossaryFile: args.glossaryFile ?? undefined,
     incremental: args.incremental,
+    glossary: args.glossary,
     dryRun: args.dryRun,
+    diff: args.diff,
+    validate: args.validate,
     force: args.force,
     config: Object.keys(configOverrides).length > 0 ? configOverrides : undefined,
   });
 
+  if (args.diff) return;
+
+  if (args.validate) return;
+
   if (!args.output) {
     const locales = Object.keys(result);
-    process.stdout.write(locales.length === 1 ? result[locales[0]] : JSON.stringify(result, null, 2) + '\n');
+    process.stdout.write(locales.length === 1 ? result[locales[0]] : `${JSON.stringify(result, null, 2)}\n`);
   } else {
     logger.success(`Done. Wrote ${Object.keys(result).length} locale file(s).`);
   }

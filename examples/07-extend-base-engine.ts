@@ -14,13 +14,10 @@
 import { translate, BaseEngine, LoquiConfig, TranslationChunk, TranslationResult } from '@mihairo/loqui';
 
 class MyCustomEngine extends BaseEngine {
-  private readonly apiKey: string;
-
   constructor(config: LoquiConfig) {
-    super(config);
-    const key = process.env['MY_API_KEY'];
-    if (!key) throw new Error('MY_API_KEY is not set.');
-    this.apiKey = key;
+    const apiKey = process.env['MY_API_KEY'];
+    if (!apiKey) throw new Error('MY_API_KEY is not set.');
+    super(config, apiKey);
   }
 
   async translateChunk(

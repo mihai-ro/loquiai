@@ -3,16 +3,20 @@ const MASK_SUFFIX = '⟧';
 const REGEX_CACHE_MAX = 128;
 
 function lruGet<K, V>(cache: Map<K, V>, key: K): V | undefined {
-  if (!cache.has(key)) return undefined;
-  const val = cache.get(key)!;
+  const val = cache.get(key);
+  if (val === undefined) return undefined;
   cache.delete(key);
   cache.set(key, val);
   return val;
 }
 
 function lruSet<K, V>(cache: Map<K, V>, key: K, val: V, max: number): void {
-  if (cache.has(key)) cache.delete(key);
-  else if (cache.size >= max) cache.delete(cache.keys().next().value!);
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= max) {
+    const oldest = cache.keys().next();
+    if (!oldest.done) cache.delete(oldest.value);
+  }
   cache.set(key, val);
 }
 
@@ -36,21 +40,23 @@ export function maskPlaceholders(input: string, customPatterns?: string[]): Mask
 
   // user-defined patterns applied first (most specific)
   // Compiled regex objects are cached so repeated calls don't recompile on every key.
-  for (let idx = 0; idx < (customPatterns ?? []).length; idx++) {
-    const pattern = customPatterns![idx];
-    let re = lruGet(customRegexCache, pattern);
-    if (!re) {
-      try {
-        re = new RegExp(pattern, 'g');
-      } catch {
-        throw new Error(
-          `Invalid placeholder pattern at config.placeholderPatterns[${idx}]: ${JSON.stringify(pattern)}`
-        );
+  if (customPatterns) {
+    for (let idx = 0; idx < customPatterns.length; idx++) {
+      const pattern = customPatterns[idx];
+      let re = lruGet(customRegexCache, pattern);
+      if (!re) {
+        try {
+          re = new RegExp(pattern, 'g');
+        } catch {
+          throw new Error(
+            `Invalid placeholder pattern at config.placeholderPatterns[${idx}]: ${JSON.stringify(pattern)}`,
+          );
+        }
+        lruSet(customRegexCache, pattern, re, REGEX_CACHE_MAX);
       }
-      lruSet(customRegexCache, pattern, re, REGEX_CACHE_MAX);
+      re.lastIndex = 0;
+      result = result.replace(re, (match) => mask(match));
     }
-    re.lastIndex = 0;
-    result = result.replace(re, (match) => mask(match));
   }
 
   // {{double mustache}} — Vue, Angular, Handlebars, Jinja2

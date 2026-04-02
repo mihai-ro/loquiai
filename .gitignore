@@ -4,6 +4,10 @@ dist/
 # test compilation output — separate from dist to avoid polluting the build
 .dist-test/
 
+# test coverage reports
+coverage/
+.coverage/
+
 # dependencies
 node_modules/
 

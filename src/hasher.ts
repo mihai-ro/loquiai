@@ -1,6 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { HashStore } from './types.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { HashStore } from './types.js';
 import { readJson, writeJson } from './utils/json.js';
 
 export function loadHashStore(hashFile: string): HashStore {

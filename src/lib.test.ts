@@ -1,12 +1,18 @@
-import { describe, test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { after, before, describe, test } from 'node:test';
+import { hashValue } from './hasher.js';
 import { translate } from './lib.js';
 import { translateJson } from './translator.js';
-import { EngineAdapter, LoquiConfig, TranslationChunk, TranslationResult, CONFIG_DEFAULTS } from './types.js';
-import { hashValue } from './hasher.js';
+import {
+  CONFIG_DEFAULTS,
+  type EngineAdapter,
+  type LoquiConfig,
+  type TranslationChunk,
+  type TranslationResult,
+} from './types.js';
 
 const config: LoquiConfig = { ...CONFIG_DEFAULTS };
 
@@ -50,15 +56,15 @@ describe('translate — basic functionality', () => {
       engine: makeEngine(),
     });
 
-    assert.ok(result['fr']);
-    assert.ok(result['de']);
+    assert.ok(result.fr);
+    assert.ok(result.de);
 
-    const fr = JSON.parse(result['fr']);
-    assert.equal(fr['greeting'], 'HELLO');
-    assert.equal(fr['farewell'], 'GOODBYE');
+    const fr = JSON.parse(result.fr);
+    assert.equal(fr.greeting, 'HELLO');
+    assert.equal(fr.farewell, 'GOODBYE');
 
-    const de = JSON.parse(result['de']);
-    assert.equal(de['greeting'], 'HELLO');
+    const de = JSON.parse(result.de);
+    assert.equal(de.greeting, 'HELLO');
   });
 
   test('throws on invalid JSON input', async () => {
@@ -69,7 +75,7 @@ describe('translate — basic functionality', () => {
           from: 'en',
           to: ['fr'],
         }),
-      (err: Error) => err.message.includes('Failed to parse input as JSON')
+      (err: Error) => err.message.includes('Failed to parse input as JSON'),
     );
   });
 
@@ -80,7 +86,7 @@ describe('translate — basic functionality', () => {
           input: '{"greeting":"hello"}',
           to: ['fr'],
         }),
-      (err: Error) => err.message.includes("'from'") || err.message.includes('source locale')
+      (err: Error) => err.message.includes("'from'") || err.message.includes('source locale'),
     );
   });
 
@@ -91,7 +97,7 @@ describe('translate — basic functionality', () => {
           input: '{"greeting":"hello"}',
           from: 'en',
         }),
-      (err: Error) => err.message.includes("'to'") || err.message.includes('target locale')
+      (err: Error) => err.message.includes("'to'") || err.message.includes('target locale'),
     );
   });
 });
@@ -147,7 +153,7 @@ describe('translate — force mode', () => {
       engine: makeEngine(),
     });
 
-    assert.equal(result.translations['fr']['greeting'], 'HELLO');
+    assert.equal(result.translations.fr.greeting, 'HELLO');
   });
 });
 
@@ -171,7 +177,7 @@ describe('translate — output path template', () => {
     assert.equal(fs.existsSync(dePath), true, 'de.json should be created');
 
     const fr = JSON.parse(await fs.promises.readFile(frPath, 'utf-8'));
-    assert.equal(fr['greeting'], 'HELLO');
+    assert.equal(fr.greeting, 'HELLO');
   });
 
   test('treats plain directory path as output dir', async () => {
@@ -264,14 +270,7 @@ describe('translate — incremental mode', () => {
       engine: trackingEngine,
     });
 
-    assert.ok(
-      capturedChunkKeys['farewell'] !== undefined,
-      'stale key should be re-translated'
-    );
-    assert.equal(
-      capturedChunkKeys['greeting'],
-      undefined,
-      'unchanged key should not be sent to engine'
-    );
+    assert.ok(capturedChunkKeys.farewell !== undefined, 'stale key should be re-translated');
+    assert.equal(capturedChunkKeys.greeting, undefined, 'unchanged key should not be sent to engine');
   });
 });

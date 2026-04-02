@@ -1,5 +1,5 @@
-import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
 import { maskPlaceholders, restorePlaceholders } from './placeholder.js';
 
 describe('maskPlaceholders', () => {
@@ -26,7 +26,7 @@ describe('maskPlaceholders', () => {
 
   test('masks ICU plural blocks as a single token', () => {
     const input = '{count, plural, =1 {# item} other {# items}}';
-    const { masked, map } = maskPlaceholders(input);
+    const { map } = maskPlaceholders(input);
     assert.equal(Object.keys(map).length, 1, 'whole block should be one mask token');
     assert.equal(Object.values(map)[0], input);
   });
@@ -53,7 +53,7 @@ describe('maskPlaceholders', () => {
 
   test('handles mixed content', () => {
     const input = '{{greeting}}, ${user}! You have {count, plural, =1 {# msg} other {# msgs}}.';
-    const { masked, map } = maskPlaceholders(input);
+    const { masked } = maskPlaceholders(input);
     assert.ok(!masked.includes('{{greeting}}'));
     assert.ok(!masked.includes('${user}'));
     assert.ok(!masked.includes('{count'));

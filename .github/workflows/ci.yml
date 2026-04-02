@@ -13,6 +13,23 @@ permissions:
   checks: write
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: ".node-version"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+
   lint-pr-title:
     name: Lint PR title
     if: github.event_name == 'pull_request'
@@ -37,18 +54,22 @@ jobs:
 
   test:
     name: Build & Test
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+
       - uses: actions/setup-node@v6
         with:
           node-version-file: ".node-version"
-          cache: "npm"
 
-      - run: npm ci
-      - run: npm audit --audit-level=high
-      - run: npm run test:ci
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
+      - run: pnpm run test:ci
 
       - uses: dorny/test-reporter@v2.6.0
         if: always()

@@ -1,0 +1,34 @@
+name: Translate i18n
+
+on:
+  push:
+    paths: ['src/i18n/en.json']
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Translate i18n files
+        run: npx @mihairo/loqui --input src/i18n/en.json --from en --to fr,de,es --output src/i18n/{locale}.json --incremental --glossary
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: 'chore: update i18n translations'
+          commit-message: 'chore: update i18n translations'
+          branch: i18n/update
+          body: |
+            Automated translation updates for locales: fr, de, es
+          delete-branch: true

@@ -1,0 +1,42 @@
+name: 'loqui i18n'
+description: 'Translate i18n JSON files using LLMs'
+inputs:
+  input:
+    description: 'Source JSON file path'
+    required: true
+  from:
+    description: 'Source locale'
+    required: true
+  to:
+    description: 'Target locales (comma-separated)'
+    required: true
+  engine:
+    description: 'LLM engine: gemini, openai, anthropic'
+    default: 'gemini'
+  output:
+    description: 'Output path template with {locale} token'
+    default: './i18n/{locale}.json'
+  incremental:
+    description: 'Use incremental translation'
+    default: 'true'
+  glossary:
+    description: 'Use glossary for translation memory'
+    default: 'true'
+  model:
+    description: 'Model name (e.g., gemini-2.0-flash, gpt-4o)'
+    default: ''
+  context:
+    description: 'Domain context for translation'
+    default: ''
+  config:
+    description: 'Path to .loqui.json config file'
+    default: ''
+
+runs:
+  using: 'node20'
+  main: '../../dist/index.mjs'
+  post-run-if-done: 'node -e "const fs = require(\"fs\"); const p = process.env.GITHUB_STATE; if (p && fs.existsSync(p)) fs.unlinkSync(p);"'
+
+branding:
+  icon: 'globe'
+  color: 'blue'

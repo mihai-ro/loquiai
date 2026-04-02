@@ -1,6 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { CONFIG_DEFAULTS, LoquiConfig } from './types.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG_DEFAULTS, type LoquiConfig } from './types.js';
 
 const CONFIG_FILE = '.loqui.json';
 

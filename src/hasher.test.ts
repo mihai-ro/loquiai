@@ -1,6 +1,6 @@
-import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hashValue, buildUpdatedHashStore } from './hasher.js';
+import { describe, test } from 'node:test';
+import { buildUpdatedHashStore, hashValue } from './hasher.js';
 
 describe('hashValue', () => {
   test('same input produces same hash', () => {
@@ -21,15 +21,15 @@ describe('buildUpdatedHashStore', () => {
     const existing = { a: 'hash-a' };
     const current = { b: 'hash-b' };
     const result = buildUpdatedHashStore(existing, current);
-    assert.equal(result['a'], 'hash-a');
-    assert.equal(result['b'], 'hash-b');
+    assert.equal(result.a, 'hash-a');
+    assert.equal(result.b, 'hash-b');
   });
 
   test('current hashes overwrite existing ones', () => {
     const existing = { a: 'old-hash' };
     const current = { a: 'new-hash' };
     const result = buildUpdatedHashStore(existing, current);
-    assert.equal(result['a'], 'new-hash');
+    assert.equal(result.a, 'new-hash');
   });
 
   test('does not mutate the existing store', () => {

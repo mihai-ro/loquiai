@@ -39,7 +39,7 @@
     "build": "pnpm clean && tsc -p tsconfig.build.json && node scripts/build.mjs",
     "build:watch": "tsc -p tsconfig.build.json --watch",
     "test": "tsc -p tsconfig.test.json && node --test '.dist-test/**/*.test.js'",
-    "test:ci": "tsc -p tsconfig.test.json && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml '.dist-test/**/*.test.js'",
+    "test:ci": "tsc -p tsconfig.test.json && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml .dist-test/",
     "test:coverage": "tsc -p tsconfig.test.json && c8 node --test '.dist-test/**/*.test.js'",
     "test:watch": "node --test --watch '.dist-test/**/*.test.js'",
     "clean": "rm -rf dist",

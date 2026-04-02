@@ -9,19 +9,9 @@ export type GeminiModel =
   | 'gemini-1.5-pro'
   | (string & {});
 
-export type OpenAIModel =
-  | 'gpt-4o'
-  | 'gpt-4o-mini'
-  | 'gpt-4-turbo'
-  | 'gpt-4'
-  | 'gpt-3.5-turbo'
-  | (string & {});
+export type OpenAIModel = 'gpt-4o' | 'gpt-4o-mini' | 'gpt-4-turbo' | 'gpt-4' | 'gpt-3.5-turbo' | (string & {});
 
-export type AnthropicModel =
-  | 'claude-opus-4-6'
-  | 'claude-sonnet-4-6'
-  | 'claude-haiku-4-5-20251001'
-  | (string & {});
+export type AnthropicModel = 'claude-opus-4-6' | 'claude-sonnet-4-6' | 'claude-haiku-4-5-20251001' | (string & {});
 
 export type SupportedModel = GeminiModel | OpenAIModel | AnthropicModel;
 
@@ -90,8 +80,8 @@ export interface TranslationResult {
   keys: FlatTranslations;
 }
 
-/** A mapping of source keys to their content hashes, used for incremental translation. */
 export type HashStore = Record<string, string>;
+export type Glossary = Record<string, Record<string, string>>;
 
 /** Runtime statistics collected during a translation run. */
 export interface RunStats {
@@ -111,6 +101,6 @@ export interface EngineAdapter {
     chunk: TranslationChunk,
     targetLocales: string[],
     sourceLocale: string,
-    namespace: string
+    namespace: string,
   ): Promise<Record<string, TranslationResult>>;
 }

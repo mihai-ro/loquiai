@@ -1,13 +1,27 @@
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadConfig } from './config.js';
-import { translateJson } from './translator.js';
-import { flatten, unflatten, deepSortKeys, readJson, writeJson } from './utils/json.js';
+import { diffLocales } from './diff.js';
+import { loadGlossary, saveGlossary } from './glossary.js';
 import { loadHashStore, saveHashStore } from './hasher.js';
-import { LoquiConfig, FlatTranslations, RunStats, EngineAdapter, HashStore, TranslationChunk, TranslationResult } from './types.js';
+import { translateJson } from './translator.js';
+import type {
+  EngineAdapter,
+  FlatTranslations,
+  Glossary,
+  HashStore,
+  LoquiConfig,
+  RunStats,
+  TranslationChunk,
+  TranslationResult,
+} from './types.js';
+import { deepSortKeys, flatten, readJson, unflatten } from './utils/json.js';
+import { logger } from './utils/logger.js';
+import { validateLocales } from './validate.js';
 
 export { BaseEngine } from './engines/base.engine.js';
-export type { LoquiConfig, RunStats, FlatTranslations, EngineAdapter, TranslationChunk, TranslationResult };
+export { createEngine } from './engines/factory.js';
+export type { EngineAdapter, FlatTranslations, Glossary, LoquiConfig, RunStats, TranslationChunk, TranslationResult };
 
 export interface TranslateOptions {
   /**
@@ -40,10 +54,13 @@ export interface TranslateOptions {
   incremental?: boolean;
   /** Explicit path for the hash sidecar file. Implies incremental. */
   hashFile?: string;
-  /** Re-translate all keys regardless of existing translations or hash. */
+  glossary?: boolean;
+  glossaryFile?: string;
   force?: boolean;
   /** Preview without calling the API or writing files. */
   dryRun?: boolean;
+  diff?: boolean;
+  validate?: boolean;
   /** Custom engine — bypasses config.engine. */
   engine?: EngineAdapter;
   /** Inline config merged over any config file found. */
@@ -96,9 +113,10 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   // resolve input
   const isRawJson = options.input.trimStart().startsWith('{');
   const inputPath = isRawJson ? null : path.resolve(options.input);
-  const inputJson = isRawJson ? options.input : fs.readFileSync(inputPath!, 'utf-8');
+  const inputJson = isRawJson ? options.input : fs.readFileSync(path.resolve(options.input), 'utf-8');
 
-  const namespace = options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
+  const namespace =
+    options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
 
   let sourceFlat: ReturnType<typeof flatten>;
   try {
@@ -119,12 +137,68 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     }
   }
 
+  // Diff mode: compare and report without translating
+  if (options.diff) {
+    const results = diffLocales(sourceFlat, existing);
+    for (const r of results) {
+      logger.info(`[${r.locale}]`);
+      for (const key of r.added) logger.info(`  + ${key}`);
+      for (const key of r.removed) logger.info(`  - ${key}`);
+      for (const key of r.changed) logger.info(`  ~ ${key}`);
+      logger.dim(
+        `Summary: ${r.added.length} added, ${r.removed.length} removed, ${r.changed.length} changed, ${r.unchanged.length} unchanged`,
+      );
+    }
+    return {};
+  }
+
+  if (options.validate) {
+    if (Object.keys(existing).length === 0) {
+      logger.warn('No existing translation files found to validate.');
+      return {};
+    }
+    const results = validateLocales(sourceFlat, existing);
+    let totalMissing = 0;
+    let totalExtra = 0;
+    let totalOk = 0;
+    for (const r of results) {
+      logger.info(`[${r.locale}]`);
+      for (const key of r.missing) {
+        logger.error(`  ✗ missing: ${key}`);
+        totalMissing++;
+      }
+      for (const key of r.extra) {
+        logger.error(`  ✗ extra: ${key}`);
+        totalExtra++;
+      }
+      totalOk += r.ok.length;
+    }
+    logger.dim(`Summary: ${totalMissing} missing, ${totalExtra} extra, ${totalOk} ok`);
+    if (totalMissing > 0 || totalExtra > 0) {
+      process.exitCode = 1;
+    }
+    return {};
+  }
+
   // load hash store if incremental
   const useIncremental = options.incremental || Boolean(options.hashFile);
-  const hashFilePath = options.hashFile ?? (inputPath ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-hash.json`) : null);
+  const hashFilePath =
+    options.hashFile ??
+    (inputPath
+      ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-hash.json`)
+      : null);
   const hashStore: HashStore = useIncremental && hashFilePath ? loadHashStore(hashFilePath) : {};
 
-  const { translations, updatedHashStore, stats } = await translateJson({
+  // load glossary if enabled
+  const useGlossary = options.glossary || Boolean(options.glossaryFile);
+  const glossaryFilePath =
+    options.glossaryFile ??
+    (inputPath
+      ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-glossary.json`)
+      : null);
+  const glossary: Glossary = useGlossary && glossaryFilePath ? loadGlossary(glossaryFilePath) : {};
+
+  const { translations, updatedHashStore, updatedGlossary, stats } = await translateJson({
     sourceFlat,
     from,
     to,
@@ -132,6 +206,8 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     config,
     existing,
     hashStore: useIncremental ? hashStore : undefined,
+    glossary: useGlossary ? glossary : undefined,
+    glossaryPath: glossaryFilePath ?? undefined,
     force: options.force,
     dryRun: options.dryRun,
     engine: options.engine,
@@ -142,7 +218,7 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   // serialize results
   const result: Record<string, string> = {};
   for (const [locale, flat] of Object.entries(translations)) {
-    result[locale] = JSON.stringify(deepSortKeys(unflatten(flat) as Record<string, unknown>), null, 2) + '\n';
+    result[locale] = `${JSON.stringify(deepSortKeys(unflatten(flat) as Record<string, unknown>), null, 2)}\n`;
   }
 
   // write output files
@@ -160,13 +236,18 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     saveHashStore(hashFilePath, updatedHashStore);
   }
 
+  // persist glossary
+  if (useGlossary && glossaryFilePath && !options.dryRun) {
+    saveGlossary(glossaryFilePath, updatedGlossary);
+  }
+
   return result;
 }
 
 function resolveOutputPaths(
   output: TranslateOptions['output'],
   to: string[],
-  inputPath: string | null
+  _inputPath: string | null,
 ): Record<string, string> | null {
   if (!output) return null;
 
@@ -183,7 +264,9 @@ function resolveOutputPaths(
 
 function logStats(stats: RunStats): void {
   if (stats.keysTranslated > 0 || stats.warnings.length > 0) {
-    process.stderr.write(`\x1b[2m keys translated: ${stats.keysTranslated} | requests: ${stats.apiRequests} | ${(stats.elapsedMs / 1000).toFixed(1)}s\x1b[0m\n`);
+    process.stderr.write(
+      `\x1b[2m keys translated: ${stats.keysTranslated} | requests: ${stats.apiRequests} | ${(stats.elapsedMs / 1000).toFixed(1)}s\x1b[0m\n`,
+    );
   }
   for (const w of stats.warnings) {
     process.stderr.write(`\x1b[33m[❗️] ${w}\x1b[0m\n`);

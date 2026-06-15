@@ -48,6 +48,8 @@ export interface LoquiConfig {
   placeholderPatterns?: string[];
   /** Request timeout in milliseconds. Defaults to 120000 (2 minutes). */
   timeout?: number;
+  /** When true, runs a second LLM pass to review and correct each chunk before saving. Doubles API calls. Default: false. */
+  review?: boolean;
 }
 
 /** Default configuration values for new projects. */
@@ -103,4 +105,18 @@ export interface EngineAdapter {
     sourceLocale: string,
     namespace: string,
   ): Promise<Record<string, TranslationResult>>;
+  /** Optional self-review pass — called after translateChunk when config.review is true. */
+  reviewChunk?(
+    chunk: TranslationChunk,
+    initial: Record<string, TranslationResult>,
+    targetLocales: string[],
+    sourceLocale: string,
+    namespace: string,
+  ): Promise<Record<string, TranslationResult>>;
+  /**
+   * optional hook for the AIMD concurrency controller.
+   * Called by `translateJson` so that rate-limit signals from within the engine
+   * can feed back into the concurrency window.
+   */
+  setRateLimitSignal?(fn: () => void): void;
 }

@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # No grouping — each action update gets its own PR so security fixes
+    # can be reviewed and merged independently without waiting for a batch.
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Dev deps only (biome, esbuild, c8, typescript) — loqui has zero runtime deps.
+    # Still relevant for build-tool CVEs and type-checking regressions.

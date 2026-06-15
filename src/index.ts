@@ -55,6 +55,7 @@ Exit codes:
 import fs from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import { EXIT_CODES, LoquiError } from './errors.js';
 import { translate } from './lib.js';
 import { CONFIG_DEFAULTS, DEFAULT_MODELS, type LoquiConfig, type SupportedEngine } from './types.js';
@@ -283,8 +284,10 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  logger.error(err.message ?? String(err));
-  const code = err instanceof LoquiError ? EXIT_CODES[err.code] : 1;
-  process.exit(code);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    logger.error(err.message ?? String(err));
+    const code = err instanceof LoquiError ? EXIT_CODES[err.code] : 1;
+    process.exit(code);
+  });
+}

@@ -5,6 +5,7 @@ loqui — i18n translation CLI
 
 Usage:
   loqui [input] [options]
+  loqui init                    Interactive setup wizard — creates .loqui.json
 
   [input] — one of:
     --input <file>         read from a JSON file
@@ -37,11 +38,24 @@ Environment variables:
   GEMINI_API_KEY      — required when engine = "gemini"
   OPENAI_API_KEY      — required when engine = "openai"
   ANTHROPIC_API_KEY   — required when engine = "anthropic"
+
+Exit codes:
+  0  success
+  1  unexpected error
+  2  AUTH            — invalid or missing API key
+  3  RATE_LIMIT      — rate limit exhausted after retries
+  4  TIMEOUT         — request timed out after retries
+  5  NETWORK_ERROR   — network failure after retries
+  6  INVALID_RESPONSE — API returned an unexpected response
+  7  PARSE_ERROR     — failed to parse API response as JSON
+  8  CHUNK_FAILED    — one or more translation chunks failed
+  9  INVALID_CONFIG  — .loqui.json is missing required fields or has invalid values
 `.trim();
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { EXIT_CODES, LoquiError } from './errors.js';
 import { translate } from './lib.js';
 import { CONFIG_DEFAULTS, DEFAULT_MODELS, type LoquiConfig, type SupportedEngine } from './types.js';
 import { logger } from './utils/logger.js';
@@ -271,5 +285,6 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   logger.error(err.message ?? String(err));
-  process.exit(1);
+  const code = err instanceof LoquiError ? EXIT_CODES[err.code] : 1;
+  process.exit(code);
 });

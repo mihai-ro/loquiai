@@ -1,4 +1,6 @@
 import { createEngine } from './engines/factory.js';
+import { STRUCTURED_OUTPUT_MAX_PROPS } from './engines/utils.js';
+import { LoquiError } from './errors.js';
 import { lookupGlossary, updateGlossary } from './glossary.js';
 import { buildUpdatedHashStore, hashValue } from './hasher.js';
 import { maskPlaceholders, restorePlaceholders } from './placeholder.js';
@@ -50,7 +52,12 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     dryRun = false,
   } = opts;
 
-  const stats: RunStats = { keysTranslated: 0, apiRequests: 0, elapsedMs: 0, warnings: [] };
+  const stats: RunStats = {
+    keysTranslated: 0,
+    apiRequests: 0,
+    elapsedMs: 0,
+    warnings: [],
+  };
   const startTime = Date.now();
 
   const glossary = glossaryOpt ?? {};
@@ -148,7 +155,12 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
 
   if (!dryRun) {
     const engine = await createEngine(config, opts.engine);
-    const failures: number[] = [];
+    const pool = new ConcurrencyPool(config.concurrency);
+
+    // Wire the rate-limit signal so 429 responses from any engine feed back into AIMD.
+    // Note: onSuccess fires once per chunk (not per request). A 429 collapses the window
+    // immediately via setRateLimitSignal; recovery ramps up one step per 10 completed chunks.
+    engine.setRateLimitSignal?.(() => pool.onRateLimited());
 
     const tasks = chunks.map((chunk, i) => async () => {
       try {
@@ -166,15 +178,26 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
           stats,
         });
       } catch (err) {
-        logger.warn(`[${namespace}] Chunk ${i + 1}/${chunks.length} failed: ${(err as Error).message}`);
-        failures.push(i);
+        // Re-throw LoquiError as-is to preserve its code (e.g. AUTH, RATE_LIMIT)
+        // through the AggregateError wrapper so it appears in logs with its original code.
+        if (err instanceof LoquiError) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Chunk ${i + 1}/${chunks.length} failed: ${msg}`, {
+          cause: err,
+        });
       }
     });
 
-    await runConcurrent(tasks, config.concurrency);
-
-    if (failures.length > 0) {
-      throw new Error(`${failures.length} chunk(s) failed for [${namespace}]. Indices: ${failures.join(', ')}`);
+    try {
+      await pool.run(tasks);
+    } catch (err) {
+      if (err instanceof AggregateError) {
+        for (const e of err.errors) {
+          logger.warn(`[${namespace}] ${(e as Error).message}`);
+        }
+        throw new LoquiError('CHUNK_FAILED', `${err.errors.length} chunk(s) failed for [${namespace}]`, { cause: err });
+      }
+      throw err;
     }
 
     for (const chunk of chunks) {
@@ -196,7 +219,77 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   const updatedHashStore = buildUpdatedHashStore(hashStore, currentSourceHashes);
 
   stats.elapsedMs = Date.now() - startTime;
-  return { translations: workingTargets, updatedHashStore, updatedGlossary: glossary, stats };
+  return {
+    translations: workingTargets,
+    updatedHashStore,
+    updatedGlossary: glossary,
+    stats,
+  };
+}
+
+// AIMD concurrency pool
+/**
+ * Adaptive concurrency pool (AIMD — Additive Increase / Multiplicative Decrease).
+ *
+ * - Starts at the configured concurrency.
+ * - Increases the active window by 1 after RAMP_AFTER consecutive successes.
+ * - Halves the window (floor 1) on any rate-limit signal from the engine.
+ *
+ * The pool integrates with EngineAdapter.setRateLimitSignal?: engines call the
+ * callback when they observe a 429, which feeds directly into onRateLimited().
+ */
+export class ConcurrencyPool {
+  #window: number;
+  readonly #maxWindow: number;
+  #streak = 0;
+  static readonly #RAMP_AFTER = 10;
+
+  constructor(initial: number) {
+    this.#window = Math.max(1, initial);
+    this.#maxWindow = Math.max(1, initial);
+  }
+
+  get current(): number {
+    return this.#window;
+  }
+
+  onRateLimited(): void {
+    this.#window = Math.max(1, Math.ceil(this.#window / 2));
+    this.#streak = 0;
+  }
+
+  onSuccess(): void {
+    this.#streak++;
+    if (this.#streak >= ConcurrencyPool.#RAMP_AFTER) {
+      this.#window = Math.min(this.#maxWindow, this.#window + 1);
+      this.#streak = 0;
+    }
+  }
+
+  async run(tasks: (() => Promise<void>)[]): Promise<void> {
+    const executing = new Set<Promise<void>>();
+    const errors: unknown[] = [];
+
+    for (const task of tasks) {
+      const p: Promise<void> = (async () => {
+        try {
+          await task();
+          this.onSuccess();
+        } catch (err) {
+          errors.push(err);
+        }
+      })().finally(() => {
+        executing.delete(p);
+      });
+      executing.add(p);
+      while (executing.size >= this.#window) await Promise.race(executing);
+    }
+    await Promise.all(executing);
+
+    if (errors.length > 0) {
+      throw new AggregateError(errors, `${errors.length} task(s) failed`);
+    }
+  }
 }
 
 // ── internals ────────────────────────────────────────────────────────────────
@@ -215,12 +308,20 @@ interface ProcessChunkOptions {
   stats: RunStats;
 }
 
+// Translations more than 4× the source length are almost certainly hallucinations.
+const MAX_EXPANSION_RATIO = 4;
+
 async function processChunk(opts: ProcessChunkOptions): Promise<void> {
-  const { chunk, i, total, engine, activeLocales, from, namespace, workingTargets, config, stats } = opts;
+  const { chunk, i, total, engine, activeLocales, from, sourceFlat, namespace, workingTargets, config, stats } = opts;
 
   const { maskedChunk, maskMaps } = maskChunk(chunk, config.placeholderPatterns);
-  const results = await engine.translateChunk(maskedChunk, activeLocales, from, namespace);
+  let results = await engine.translateChunk(maskedChunk, activeLocales, from, namespace);
   stats.apiRequests++;
+
+  if (config.review && engine.reviewChunk) {
+    results = await engine.reviewChunk(maskedChunk, results, activeLocales, from, namespace);
+    stats.apiRequests++;
+  }
 
   for (const locale of activeLocales) {
     const localeResult = results[locale];
@@ -244,6 +345,24 @@ async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         logger.warn(w);
         stats.warnings.push(w);
         continue;
+      }
+
+      const sourceValue = sourceFlat[key] ?? '';
+
+      // Untranslated detection: value identical to source suggests the model
+      // returned the input unchanged. Warn but save — could be a proper noun.
+      if (locale !== from && sourceValue.trim() !== '' && value.trim() === sourceValue.trim()) {
+        const w = `[${namespace}→${locale}] Key "${key}" appears untranslated (identical to source)`;
+        logger.warn(w);
+        stats.warnings.push(w);
+      }
+
+      // Length explosion: ratio > 4× source is almost certainly a hallucination.
+      if (sourceValue.length > 0 && value.length > sourceValue.length * MAX_EXPANSION_RATIO) {
+        const ratio = Math.round(value.length / sourceValue.length);
+        const w = `[${namespace}→${locale}] Key "${key}" translation is ${ratio}× source length — possible hallucination`;
+        logger.warn(w);
+        stats.warnings.push(w);
       }
 
       workingTargets[locale][key] = value;
@@ -282,7 +401,16 @@ function restoreChunk(
   return restored;
 }
 
-function chunkTranslations(flat: FlatTranslations, splitToken: number, localeCount: number): TranslationChunk[] {
+// Exported for unit testing.
+export function chunkTranslations(flat: FlatTranslations, splitToken: number, localeCount: number): TranslationChunk[] {
+  // Cap keys per chunk at floor(STRUCTURED_OUTPUT_MAX_PROPS / localeCount) so that
+  // locales × keys ≤ STRUCTURED_OUTPUT_MAX_PROPS in every chunk, keeping OpenAI
+  // json_schema and Anthropic tool_use active. Gemini's limit is 50 (harder cap)
+  // but its responseMimeType:'application/json' fallback only enforces JSON syntax —
+  // not schema shape; missing/extra keys are possible. extractTranslations handles
+  // that gracefully via per-key warnings and empty-string defaults.
+  const maxKeysPerChunk =
+    localeCount > 0 ? Math.max(1, Math.floor(STRUCTURED_OUTPUT_MAX_PROPS / localeCount)) : STRUCTURED_OUTPUT_MAX_PROPS;
   const chunks: TranslationChunk[] = [];
   let current: FlatTranslations = {};
   let currentTokens = 0;
@@ -290,7 +418,7 @@ function chunkTranslations(flat: FlatTranslations, splitToken: number, localeCou
 
   for (const [key, value] of Object.entries(flat)) {
     const entryTokens = Math.ceil((`"${key}": "${value}",\n`.length / 4) * (1 + localeCount));
-    if (currentTokens + entryTokens > splitToken && currentSize > 0) {
+    if ((currentTokens + entryTokens > splitToken || currentSize >= maxKeysPerChunk) && currentSize > 0) {
       chunks.push({ keys: current });
       current = {};
       currentTokens = 0;
@@ -303,14 +431,4 @@ function chunkTranslations(flat: FlatTranslations, splitToken: number, localeCou
 
   if (currentSize > 0) chunks.push({ keys: current });
   return chunks;
-}
-
-async function runConcurrent(tasks: (() => Promise<void>)[], concurrency: number): Promise<void> {
-  const executing = new Set<Promise<void>>();
-  for (const task of tasks) {
-    const p: Promise<void> = task().finally(() => executing.delete(p));
-    executing.add(p);
-    if (executing.size >= concurrency) await Promise.race(executing);
-  }
-  await Promise.all(executing);
 }

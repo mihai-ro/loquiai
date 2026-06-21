@@ -113,3 +113,15 @@ jobs:
           name: Test Results
           path: test-results.xml
           reporter: java-junit
+
+  # Stable aggregate context required by the branch ruleset. The matrix job
+  # reports per-cell contexts (e.g. "Build & Test (ubuntu-latest / Node 20)"),
+  # so this gate provides a single fixed "Build & Test" status to gate merges on.
+  build-and-test:
+    name: Build & Test
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify matrix result
+        run: '[ "${{ needs.test.result }}" = "success" ] || exit 1'

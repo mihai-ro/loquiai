@@ -7,24 +7,26 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed by anchore/sbom-action to attach SBOM to release
+      id-token: write   # needed for npm provenance attestation
     environment:
       name: npm
       url: https://www.npmjs.com/package/@mihairo/loqui
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 10
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version-file: ".node-version"
           registry-url: "https://registry.npmjs.org"
@@ -35,3 +37,9 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          artifact-name: loqui-sbom.spdx.json
+          format: spdx-json

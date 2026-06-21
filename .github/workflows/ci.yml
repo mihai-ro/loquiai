@@ -17,25 +17,42 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 10
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version-file: ".node-version"
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
 
+  zero-dep-check:
+    name: Zero dependency guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Fail if runtime dependencies are added
+        run: |
+          node -e "
+            const p = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
+            if (p.dependencies && Object.keys(p.dependencies).length > 0) {
+              console.error('ERROR: runtime dependencies detected — loqui must stay zero-dependency.');
+              console.error(JSON.stringify(p.dependencies, null, 2));
+              process.exit(1);
+            }
+            console.log('OK: no runtime dependencies.');
+          "
+
   lint-pr-title:
     name: Lint PR title
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@v6
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -53,27 +70,58 @@ jobs:
           requireScope: false
 
   test:
-    name: Build & Test
+    name: Build & Test (${{ matrix.os }} / Node ${{ matrix.node }})
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Full Node version coverage on Linux (primary platform)
+          - os: ubuntu-latest
+            node: '20'
+          - os: ubuntu-latest
+            node: '22'
+          - os: ubuntu-latest
+            node: '24'
+          # Spot-check path-handling on macOS and Windows with current LTS
+          - os: macos-latest
+            node: '22'
+          - os: windows-latest
+            node: '22'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 10
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version-file: ".node-version"
+          node-version: ${{ matrix.node }}
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level=high
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22'
       - run: pnpm run test:ci
+      - run: pnpm run test:coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22'
 
-      - uses: dorny/test-reporter@v2.6.0
-        if: always()
+      - uses: dorny/test-reporter@3d76b34a4535afbd0600d347b09a6ee5deb3ed7f # v2.6.0
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.node == '22'
         with:
           name: Test Results
           path: test-results.xml
           reporter: java-junit
+
+  # Stable aggregate context required by the branch ruleset. The matrix job
+  # reports per-cell contexts (e.g. "Build & Test (ubuntu-latest / Node 20)"),
+  # so this gate provides a single fixed "Build & Test" status to gate merges on.
+  build-and-test:
+    name: Build & Test
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify matrix result
+        run: '[ "${{ needs.test.result }}" = "success" ] || exit 1'

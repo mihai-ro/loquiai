@@ -65,7 +65,20 @@ export function readJson(filePath: string): Record<string, unknown> {
   }
 }
 
-/** writes an object to a JSON file with 2-space indentation and a trailing newline. */
+/**
+ * writes a string to a file atomically (tmp → rename) so a crash mid-write
+ * never leaves a half-written file at the destination path.
+ */
+export function writeFileAtomic(filePath: string, content: string): void {
+  const tmp = `${filePath}.tmp`;
+  fs.writeFileSync(tmp, content, 'utf-8');
+  fs.renameSync(tmp, filePath);
+}
+
+/**
+ * writes an object to a JSON file atomically (tmp → rename) so a crash mid-write
+ * never leaves a half-written file at the destination path.
+ */
 export function writeJson(filePath: string, data: Record<string, unknown>): void {
-  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
+  writeFileAtomic(filePath, `${JSON.stringify(data, null, 2)}\n`);
 }

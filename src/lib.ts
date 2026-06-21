@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { diffLocales } from './diff.js';
+import { LoquiError } from './errors.js';
 import { loadGlossary, saveGlossary } from './glossary.js';
 import { loadHashStore, saveHashStore } from './hasher.js';
 import { translateJson } from './translator.js';
@@ -15,12 +16,14 @@ import type {
   TranslationChunk,
   TranslationResult,
 } from './types.js';
-import { deepSortKeys, flatten, readJson, unflatten } from './utils/json.js';
+import { deepSortKeys, flatten, readJson, unflatten, writeFileAtomic } from './utils/json.js';
 import { logger } from './utils/logger.js';
 import { validateLocales } from './validate.js';
 
 export { BaseEngine } from './engines/base.engine.js';
 export { createEngine } from './engines/factory.js';
+export type { LoquiErrorCode } from './errors.js';
+export { LoquiError } from './errors.js';
 export type { EngineAdapter, FlatTranslations, Glossary, LoquiConfig, RunStats, TranslationChunk, TranslationResult };
 
 export interface TranslateOptions {
@@ -102,11 +105,11 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   const config: LoquiConfig = options.config ? { ...fileConfig, ...options.config } : fileConfig;
 
   const from = options.from ?? config.from;
-  if (!from) throw new Error("'from' (source locale) is required. Set it in options or config.");
+  if (!from) throw new LoquiError('INVALID_CONFIG', "'from' (source locale) is required. Set it in options or config.");
 
   const toRaw = options.to ?? config.to;
   if (!toRaw || (Array.isArray(toRaw) && toRaw.length === 0)) {
-    throw new Error("'to' (target locale(s)) is required. Set it in options or config.");
+    throw new LoquiError('INVALID_CONFIG', "'to' (target locale(s)) is required. Set it in options or config.");
   }
   const to = Array.isArray(toRaw) ? toRaw : toRaw.split(',').map((s) => s.trim());
 
@@ -122,7 +125,7 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   try {
     sourceFlat = flatten(JSON.parse(inputJson) as Record<string, unknown>);
   } catch {
-    throw new Error(`Failed to parse input as JSON. Make sure it is a valid JSON object.`);
+    throw new LoquiError('PARSE_ERROR', 'Failed to parse input as JSON. Make sure it is a valid JSON object.');
   }
 
   // resolve output paths
@@ -226,7 +229,7 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     for (const [locale, dest] of Object.entries(outputPaths)) {
       if (result[locale] !== undefined) {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, result[locale], 'utf-8');
+        writeFileAtomic(dest, result[locale]);
       }
     }
   }

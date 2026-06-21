@@ -3,7 +3,11 @@ import { describe, test } from 'node:test';
 import { CONFIG_DEFAULTS, type LoquiConfig, type TranslationChunk, type TranslationResult } from '../types.js';
 import { BaseEngine } from './base.engine.js';
 
+type CallArgs = { systemPrompt: string; userPrompt: string; expectedKeys: string[]; targetLocales: string[] };
+
 class TestableEngine extends BaseEngine {
+  lastCall: CallArgs | null = null;
+
   constructor(config?: Partial<LoquiConfig>) {
     super({ ...CONFIG_DEFAULTS, ...config }, 'test-key');
   }
@@ -12,13 +16,16 @@ class TestableEngine extends BaseEngine {
     return this.parseResponse(raw, expectedKeys, targetLocales);
   }
 
-  async translateChunk(
-    _chunk: TranslationChunk,
-    _targetLocales: string[],
-    _sourceLocale: string,
-    _namespace: string,
+  protected async makeCall(
+    systemPrompt: string,
+    userPrompt: string,
+    expectedKeys: string[],
+    targetLocales: string[],
   ): Promise<Record<string, TranslationResult>> {
-    throw new Error('not implemented');
+    this.lastCall = { systemPrompt, userPrompt, expectedKeys, targetLocales };
+    return Object.fromEntries(
+      targetLocales.map((l) => [l, { keys: Object.fromEntries(expectedKeys.map((k) => [k, 'T'])) }]),
+    );
   }
 }
 
@@ -79,5 +86,45 @@ describe('parseResponse', () => {
     const result = engine.parseResponseForTest('```\n{"fr":{"greeting":"Salut"}}\n```', ['greeting'], ['fr']);
 
     assert.equal(result.fr.keys.greeting, 'Salut');
+  });
+});
+
+describe('reviewChunk', () => {
+  test('calls makeCall with review prompt containing source and initial translations', async () => {
+    const engine = new TestableEngine();
+    const chunk: TranslationChunk = { keys: { greeting: 'Hello' } };
+    const initial: Record<string, TranslationResult> = { fr: { keys: { greeting: 'Bonjour' } } };
+
+    await engine.reviewChunk(chunk, initial, ['fr'], 'en', 'test');
+
+    const args = engine.lastCall;
+    if (!args) throw new Error('makeCall must have been called');
+    assert.ok(args.userPrompt.includes('Hello'), 'review prompt must include source text');
+    assert.ok(args.userPrompt.includes('Bonjour'), 'review prompt must include initial translation');
+    assert.ok(args.userPrompt.toLowerCase().includes('review'), 'review prompt must mention review');
+    assert.deepEqual(args.expectedKeys, ['greeting']);
+    assert.deepEqual(args.targetLocales, ['fr']);
+  });
+
+  test('translateChunk routes through makeCall', async () => {
+    const engine = new TestableEngine();
+    await engine.translateChunk({ keys: { k: 'v' } }, ['de'], 'en', 'ns');
+    const args = engine.lastCall;
+    if (!args) throw new Error('makeCall must have been called');
+    assert.ok(args.userPrompt.includes('"k"'), 'user prompt must include source key');
+  });
+
+  test('review prompt differs from translate prompt for same chunk', async () => {
+    const engine = new TestableEngine();
+    const chunk: TranslationChunk = { keys: { msg: 'Hello' } };
+
+    await engine.translateChunk(chunk, ['fr'], 'en', 'ns');
+    const translatePrompt = engine.lastCall?.userPrompt ?? '';
+
+    await engine.reviewChunk(chunk, { fr: { keys: { msg: 'Salut' } } }, ['fr'], 'en', 'ns');
+    const reviewPrompt = engine.lastCall?.userPrompt ?? '';
+
+    assert.notEqual(translatePrompt, reviewPrompt);
+    assert.ok(reviewPrompt.includes('Salut'), 'review prompt must include initial translation value');
   });
 });

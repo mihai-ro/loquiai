@@ -70,6 +70,17 @@
       "items": { "type": "string" },
       "description": "Extra regex patterns (as strings) for tokens to preserve through translation. Applied before built-ins: {{...}}, ${...}, {var}, ICU blocks, HTML tags.",
       "examples": [["%\\{[^}]+\\}"]]
+    },
+    "timeout": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Per-request timeout in milliseconds. Default: 120000 (2 minutes).",
+      "default": 120000
+    },
+    "review": {
+      "type": "boolean",
+      "description": "When true, runs a second LLM pass to review and correct each chunk. Doubles API calls. Default: false.",
+      "default": false
     }
   }
 }

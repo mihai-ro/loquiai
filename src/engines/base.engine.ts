@@ -1,10 +1,14 @@
 import { inspect } from 'node:util';
+import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationChunk, TranslationResult } from '../types.js';
-import { sanitizeForDisplay } from './utils.js';
+import { type RetryOptions, sanitizeForDisplay } from './utils.js';
 
 export abstract class BaseEngine {
   protected config: LoquiConfig;
   #apiKey: string;
+  #rateLimitSignal: (() => void) | undefined;
+  #fetchFn: RetryOptions['fetchFn'];
+  #sleepFn: RetryOptions['sleepFn'];
 
   constructor(config: LoquiConfig, apiKey: string) {
     this.config = config;
@@ -15,16 +19,71 @@ export abstract class BaseEngine {
     return this.#apiKey;
   }
 
+  /** wired by the AIMD concurrency pool so that 429 events reduce the active window. */
+  setRateLimitSignal(fn: () => void): void {
+    this.#rateLimitSignal = fn;
+  }
+
+  protected getRateLimitSignal(): (() => void) | undefined {
+    return this.#rateLimitSignal;
+  }
+
+  /**
+   * test-only hook — injects fetch/sleep so unit tests avoid real network calls.
+   * @internal Not part of the public API; do not call in production code.
+   */
+  _setFetch(
+    fetchFn: NonNullable<RetryOptions['fetchFn']>,
+    sleepFn: NonNullable<RetryOptions['sleepFn']> = () => Promise.resolve(),
+  ): void {
+    this.#fetchFn = fetchFn;
+    this.#sleepFn = sleepFn;
+  }
+
+  protected retryHooks(): Pick<RetryOptions, 'fetchFn' | 'sleepFn'> {
+    return { fetchFn: this.#fetchFn, sleepFn: this.#sleepFn };
+  }
+
   [inspect.custom](): string {
     return `${this.constructor.name} { config: ${inspect(this.config, { depth: null })} }`;
   }
 
-  abstract translateChunk(
+  /** Makes the underlying API call. Implemented by each engine subclass. */
+  protected abstract makeCall(
+    systemPrompt: string,
+    userPrompt: string,
+    expectedKeys: string[],
+    targetLocales: string[],
+  ): Promise<Record<string, TranslationResult>>;
+
+  translateChunk(
     chunk: TranslationChunk,
     targetLocales: string[],
     sourceLocale: string,
     namespace: string,
-  ): Promise<Record<string, TranslationResult>>;
+  ): Promise<Record<string, TranslationResult>> {
+    return this.makeCall(
+      this.buildSystemPrompt(targetLocales, sourceLocale, namespace),
+      this.buildUserPrompt(chunk, targetLocales, sourceLocale),
+      Object.keys(chunk.keys),
+      targetLocales,
+    );
+  }
+
+  reviewChunk(
+    chunk: TranslationChunk,
+    initial: Record<string, TranslationResult>,
+    targetLocales: string[],
+    sourceLocale: string,
+    namespace: string,
+  ): Promise<Record<string, TranslationResult>> {
+    return this.makeCall(
+      this.buildSystemPrompt(targetLocales, sourceLocale, namespace),
+      this.buildReviewPrompt(chunk, initial, targetLocales, sourceLocale),
+      Object.keys(chunk.keys),
+      targetLocales,
+    );
+  }
 
   protected buildSystemPrompt(targetLocales: string[], sourceLocale: string, namespace: string): string {
     if (this.config.prompts?.system) {
@@ -68,6 +127,31 @@ export abstract class BaseEngine {
     return `Translate from "${sourceLocale}" to: ${targetLocales.join(', ')}.\n\n${json}`;
   }
 
+  protected buildReviewPrompt(
+    chunk: TranslationChunk,
+    initial: Record<string, TranslationResult>,
+    targetLocales: string[],
+    sourceLocale: string,
+  ): string {
+    const sourceJson = JSON.stringify(chunk.keys, null, 2);
+    const initialJson = JSON.stringify(
+      Object.fromEntries(targetLocales.map((l) => [l, initial[l]?.keys ?? {}])),
+      null,
+      2,
+    );
+    return [
+      `Review and correct these translations from "${sourceLocale}" to: ${targetLocales.join(', ')}.`,
+      'Fix errors in meaning, register, or completeness. Preserve placeholder tokens (⟦0⟧, ⟦1⟧…) unchanged.',
+      'Return all keys for every locale — unchanged if already correct.',
+      '',
+      'Source:',
+      sourceJson,
+      '',
+      'Initial translations:',
+      initialJson,
+    ].join('\n');
+  }
+
   protected parseResponse(
     raw: string,
     expectedKeys: string[],
@@ -82,9 +166,17 @@ export abstract class BaseEngine {
     try {
       parsed = JSON.parse(cleaned);
     } catch {
-      throw new Error(`Engine returned invalid JSON:\n${sanitizeForDisplay(raw)}`);
+      throw new LoquiError('PARSE_ERROR', `Engine returned invalid JSON:\n${sanitizeForDisplay(raw)}`);
     }
 
+    return this.extractTranslations(parsed, expectedKeys, targetLocales);
+  }
+
+  protected extractTranslations(
+    parsed: Record<string, unknown>,
+    expectedKeys: string[],
+    targetLocales: string[],
+  ): Record<string, TranslationResult> {
     const result: Record<string, TranslationResult> = {};
     for (const locale of targetLocales) {
       const localeData = parsed[locale];
@@ -92,7 +184,9 @@ export abstract class BaseEngine {
         process.stderr.write(
           `\x1b[33m[❗️] Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty\x1b[0m\n`,
         );
-        result[locale] = { keys: Object.fromEntries(expectedKeys.map((k) => [k, ''])) };
+        result[locale] = {
+          keys: Object.fromEntries(expectedKeys.map((k) => [k, ''])),
+        };
         continue;
       }
       const keys: Record<string, string> = {};

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/mihai-ro/loquiai/compare/loqui-v2.1.0...loqui-v2.1.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* harden Scorecard security posture ([#37](https://github.com/mihai-ro/loquiai/issues/37)) ([3a9a363](https://github.com/mihai-ro/loquiai/commit/3a9a363c1c4dcb819cbab10ded706b47bb1e7102))
+
 ## [2.1.0](https://github.com/mihai-ro/loquiai/compare/loqui-v2.0.0...loqui-v2.1.0) (2026-06-24)
 
 

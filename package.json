@@ -30,7 +30,7 @@
   "main": "./dist/lib.cjs",
   "module": "./dist/lib.js",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "bin": {
     "loqui": "dist/index.js"

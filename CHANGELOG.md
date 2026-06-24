@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/mihai-ro/loquiai/compare/loqui-v2.0.0...loqui-v2.1.0) (2026-06-24)
+
+
+### Features
+
+* structured output schemas, AIMD pool, and review pass ([#24](https://github.com/mihai-ro/loquiai/issues/24)) ([eb46fd7](https://github.com/mihai-ro/loquiai/commit/eb46fd7db611c3e1af0db79c695f70465a6af317))
+
 ## [2.0.0](https://github.com/mihai-ro/loquiai/compare/loqui-v1.1.0...loqui-v2.0.0) (2026-04-02)
 
 

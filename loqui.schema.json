@@ -81,6 +81,22 @@
       "type": "boolean",
       "description": "When true, runs a second LLM pass to review and correct each chunk. Doubles API calls. Default: false.",
       "default": false
+    },
+    "glossary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Terminology glossary: lock term translations and mark do-not-translate strings.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File OR folder. Folder = per-locale term files {path}/{locale}.json ({ term: target }). File = combined { term: { locale: target } }. Unset = inline `glossary` key in the source file."
+        },
+        "noTranslate": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Strings emitted verbatim in every locale (brand/product names, technical terms)."
+        }
+      }
     }
   }
 }

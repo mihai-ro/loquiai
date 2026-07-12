@@ -215,6 +215,57 @@ describe('translate — output path template', () => {
   });
 });
 
+describe('translate — glossary', () => {
+  test('glossary key is preserved when glossary feature is disabled', async () => {
+    // A namespace legitimately named "glossary" must not be stripped when the feature is off
+    const source = JSON.stringify({ title: 'hello', glossary: { search: 'Search' } });
+    const result = await translate({
+      input: source,
+      from: 'en',
+      to: ['es'],
+      config: { ...CONFIG_DEFAULTS },
+      engine: makeEngine(),
+    });
+    const es = JSON.parse(result.es);
+    assert.ok('glossary' in es, 'glossary key must not be stripped when feature is disabled');
+  });
+
+  test('inline glossary key in source is stripped and not translated', async () => {
+    // Source has a top-level "glossary" key — it must be stripped before translation
+    // and must not appear in any output locale
+    const sourceWithGlossary = JSON.stringify({
+      greeting: 'hello',
+      glossary: { Dashboard: { es: 'Tablero' } },
+    });
+
+    const result = await translate({
+      input: sourceWithGlossary,
+      from: 'en',
+      to: ['es'],
+      config: { ...CONFIG_DEFAULTS, glossary: {} },
+      engine: makeEngine(),
+    });
+
+    const es = JSON.parse(result.es);
+    assert.ok('greeting' in es, 'greeting key must be present');
+    assert.ok(!('glossary' in es), 'glossary key must be stripped from output');
+  });
+
+  test('noTranslate terms in glossary config survive translation verbatim', async () => {
+    // Engine uppercases everything — but noTranslate terms must survive as-is
+    const result = await translate({
+      input: JSON.stringify({ title: 'Welcome to Loqui today' }),
+      from: 'en',
+      to: ['es'],
+      config: { ...CONFIG_DEFAULTS, glossary: { noTranslate: ['Loqui'] } },
+      engine: makeEngine(),
+    });
+
+    const es = JSON.parse(result.es);
+    assert.ok(es.title?.includes('Loqui'), 'Loqui must survive translation verbatim');
+  });
+});
+
 describe('translate — incremental mode', () => {
   test('skips engine call for unchanged keys', async () => {
     let callCount = 0;

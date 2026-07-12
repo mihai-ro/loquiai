@@ -593,6 +593,96 @@ describe('translateJson — review pass', () => {
   });
 });
 
+describe('translateJson — glossary enforcement', () => {
+  test('keeps noTranslate terms verbatim in the output', async () => {
+    // Engine echoes the (masked) value back — restore must reinstate original term
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          const keys: Record<string, string> = {};
+          for (const [k, v] of Object.entries(chunk.keys)) {
+            keys[k] = v; // echo masked value verbatim
+          }
+          result[locale] = { keys };
+        }
+        return result;
+      },
+    };
+
+    const { translations } = await translateJson({
+      sourceFlat: { greeting: 'Welcome to Loqui' },
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine,
+      glossaryModel: { terms: {}, noTranslate: ['Loqui'] },
+    });
+
+    assert.ok(translations.es.greeting?.includes('Loqui'), 'Loqui must survive translation verbatim');
+    assert.ok(!translations.es.greeting?.includes('⟦T'), 'no sentinel tokens should remain in output');
+  });
+
+  test('skips a key whose translation drops a locked glossary term', async () => {
+    // Engine returns translation WITHOUT the locked term "Tablero"
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'Resumen general'])),
+          };
+        }
+        return result;
+      },
+    };
+
+    const existing = { es: { title: 'existing value' } };
+    const { translations, stats } = await translateJson({
+      sourceFlat: { title: 'Dashboard overview' },
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      existing,
+      force: true,
+      engine,
+      glossaryModel: { terms: { Dashboard: { es: 'Tablero' } }, noTranslate: [] },
+    });
+
+    // key skipped → existing value preserved (retry next run)
+    assert.equal(translations.es.title, 'existing value');
+    assert.ok(stats.warnings.some((w) => w.includes('missing glossary term')));
+  });
+
+  test('saves a key when locked glossary term is present in translation', async () => {
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'Resumen del Tablero'])),
+          };
+        }
+        return result;
+      },
+    };
+
+    const { translations } = await translateJson({
+      sourceFlat: { title: 'Dashboard overview' },
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine,
+      glossaryModel: { terms: { Dashboard: { es: 'Tablero' } }, noTranslate: [] },
+    });
+
+    assert.equal(translations.es.title, 'Resumen del Tablero');
+  });
+});
+
 describe('chunkTranslations — key-count bound', () => {
   function makeFlat(n: number): Record<string, string> {
     return Object.fromEntries(Array.from({ length: n }, (_, i) => [`key${i}`, 'value']));

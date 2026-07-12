@@ -1,17 +1,19 @@
 import { createEngine } from './engines/factory.js';
 import { STRUCTURED_OUTPUT_MAX_PROPS } from './engines/utils.js';
 import { LoquiError } from './errors.js';
-import { lookupGlossary, updateGlossary } from './glossary.js';
+import { buildGlossaryPromptBlock, findTermsInText, maskTerms } from './glossary.js';
 import { buildUpdatedHashStore, hashValue } from './hasher.js';
 import { maskPlaceholders, restorePlaceholders } from './placeholder.js';
+import { lookupTranslationMemory, updateTranslationMemory } from './translation-memory.js';
 import type {
   EngineAdapter,
   FlatTranslations,
-  Glossary,
+  GlossaryModel,
   HashStore,
   LoquiConfig,
   RunStats,
   TranslationChunk,
+  TranslationMemory,
 } from './types.js';
 import { logger } from './utils/logger.js';
 
@@ -23,8 +25,9 @@ export interface TranslateJobOptions {
   config: LoquiConfig;
   existing?: Record<string, FlatTranslations>;
   hashStore?: HashStore;
-  glossary?: Glossary;
-  glossaryPath?: string;
+  translationMemory?: TranslationMemory;
+  translationMemoryPath?: string;
+  glossaryModel?: GlossaryModel;
   force?: boolean;
   dryRun?: boolean;
   engine?: EngineAdapter;
@@ -33,7 +36,7 @@ export interface TranslateJobOptions {
 export interface TranslateJobResult {
   translations: Record<string, FlatTranslations>;
   updatedHashStore: HashStore;
-  updatedGlossary: Glossary;
+  updatedTranslationMemory: TranslationMemory;
   stats: RunStats;
 }
 
@@ -46,8 +49,9 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     config,
     existing = {},
     hashStore = {},
-    glossary: glossaryOpt,
-    glossaryPath: _glossaryPath,
+    translationMemory: tmOpt,
+    translationMemoryPath: _translationMemoryPath,
+    glossaryModel,
     force = false,
     dryRun = false,
   } = opts;
@@ -60,16 +64,16 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   };
   const startTime = Date.now();
 
-  const glossary = glossaryOpt ?? {};
+  const translationMemory = tmOpt ?? {};
 
   // Hashes are source-derived — compute once for all keys, regardless of what needs translating.
   // This ensures the hash file is always up to date even on "nothing to do" runs.
   const currentSourceHashes: HashStore = {};
-  const sourceHashesForGlossary: Record<string, string> = {};
+  const sourceHashesForTm: Record<string, string> = {};
   for (const [key, value] of Object.entries(sourceFlat)) {
     const hash = hashValue(value);
     currentSourceHashes[key] = hash;
-    sourceHashesForGlossary[key] = hash;
+    sourceHashesForTm[key] = hash;
   }
 
   const workingTargets: Record<string, FlatTranslations> = {};
@@ -106,7 +110,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     return {
       translations: workingTargets,
       updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
-      updatedGlossary: glossary,
+      updatedTranslationMemory: translationMemory,
       stats,
     };
   }
@@ -116,20 +120,20 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     `[${namespace}]${dryRun ? ' [dry-run]' : ''} Translating ${allKeysNeeded.size} key(s) → ${activeLocales.join(', ')}`,
   );
 
-  const glossaryCache: Record<string, Record<string, string>> = {};
+  const tmCache: Record<string, Record<string, string>> = {};
   const keysNeedingTranslation: FlatTranslations = {};
 
   for (const key of allKeysNeeded) {
-    const hash = sourceHashesForGlossary[key];
-    const cached = lookupGlossary(glossary, hash, activeLocales);
+    const hash = sourceHashesForTm[key];
+    const cached = lookupTranslationMemory(translationMemory, hash, activeLocales);
     if (cached) {
-      glossaryCache[key] = cached;
+      tmCache[key] = cached;
     } else {
       keysNeedingTranslation[key] = sourceFlat[key];
     }
   }
 
-  for (const [key, cached] of Object.entries(glossaryCache)) {
+  for (const [key, cached] of Object.entries(tmCache)) {
     for (const locale of activeLocales) {
       if (!(locale in workingTargets)) workingTargets[locale] = { ...existing[locale] };
       workingTargets[locale][key] = cached[locale];
@@ -138,12 +142,12 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   }
 
   if (Object.keys(keysNeedingTranslation).length === 0) {
-    logger.info(`[${namespace}] All ${allKeysNeeded.size} key(s) served from glossary.`);
+    logger.info(`[${namespace}] All ${allKeysNeeded.size} key(s) served from translation memory.`);
     stats.elapsedMs = Date.now() - startTime;
     return {
       translations: workingTargets,
       updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
-      updatedGlossary: glossary,
+      updatedTranslationMemory: translationMemory,
       stats,
     };
   }
@@ -176,6 +180,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
           workingTargets,
           config,
           stats,
+          glossaryModel,
         });
       } catch (err) {
         // Re-throw LoquiError as-is to preserve its code (e.g. AUTH, RATE_LIMIT)
@@ -202,7 +207,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
 
     for (const chunk of chunks) {
       for (const key of Object.keys(chunk.keys)) {
-        const hash = sourceHashesForGlossary[key];
+        const hash = sourceHashesForTm[key];
         if (!hash) continue;
         const translations: Record<string, string> = {};
         for (const locale of activeLocales) {
@@ -210,7 +215,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
           if (translated) translations[locale] = translated;
         }
         if (Object.keys(translations).length === activeLocales.length) {
-          updateGlossary(glossary, hash, translations);
+          updateTranslationMemory(translationMemory, hash, translations);
         }
       }
     }
@@ -222,7 +227,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   return {
     translations: workingTargets,
     updatedHashStore,
-    updatedGlossary: glossary,
+    updatedTranslationMemory: translationMemory,
     stats,
   };
 }
@@ -306,20 +311,39 @@ interface ProcessChunkOptions {
   workingTargets: Record<string, FlatTranslations>;
   config: LoquiConfig;
   stats: RunStats;
+  glossaryModel?: GlossaryModel;
 }
 
 // Translations more than 4× the source length are almost certainly hallucinations.
 const MAX_EXPANSION_RATIO = 4;
 
 async function processChunk(opts: ProcessChunkOptions): Promise<void> {
-  const { chunk, i, total, engine, activeLocales, from, sourceFlat, namespace, workingTargets, config, stats } = opts;
+  const {
+    chunk,
+    i,
+    total,
+    engine,
+    activeLocales,
+    from,
+    sourceFlat,
+    namespace,
+    workingTargets,
+    config,
+    stats,
+    glossaryModel,
+  } = opts;
 
-  const { maskedChunk, maskMaps } = maskChunk(chunk, config.placeholderPatterns);
-  let results = await engine.translateChunk(maskedChunk, activeLocales, from, namespace);
+  const noTranslate = glossaryModel?.noTranslate ?? [];
+  const { maskedChunk, maskMaps } = maskChunk(chunk, config.placeholderPatterns, noTranslate);
+
+  const chunkText = Object.values(chunk.keys).join('\n');
+  const glossaryBlock = glossaryModel ? buildGlossaryPromptBlock(glossaryModel.terms, chunkText, activeLocales) : '';
+
+  let results = await engine.translateChunk(maskedChunk, activeLocales, from, namespace, glossaryBlock);
   stats.apiRequests++;
 
   if (config.review && engine.reviewChunk) {
-    results = await engine.reviewChunk(maskedChunk, results, activeLocales, from, namespace);
+    results = await engine.reviewChunk(maskedChunk, results, activeLocales, from, namespace, glossaryBlock);
     stats.apiRequests++;
   }
 
@@ -345,6 +369,21 @@ async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         logger.warn(w);
         stats.warnings.push(w);
         continue;
+      }
+
+      // Glossary term-lock: the locked target term must appear in the translation.
+      if (glossaryModel) {
+        const sourceTerms = findTermsInText(sourceFlat[key] ?? '', Object.keys(glossaryModel.terms));
+        const missingTerms = sourceTerms.filter((term) => {
+          const locked = glossaryModel.terms[term]?.[locale];
+          return locked && !value.toLowerCase().includes(locked.toLowerCase());
+        });
+        if (missingTerms.length > 0) {
+          const w = `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`;
+          logger.warn(w);
+          stats.warnings.push(w);
+          continue;
+        }
       }
 
       const sourceValue = sourceFlat[key] ?? '';
@@ -376,6 +415,7 @@ async function processChunk(opts: ProcessChunkOptions): Promise<void> {
 function maskChunk(
   chunk: TranslationChunk,
   customPatterns?: string[],
+  noTranslate: string[] = [],
 ): {
   maskedChunk: TranslationChunk;
   maskMaps: Record<string, Record<string, string>>;
@@ -383,9 +423,12 @@ function maskChunk(
   const maskedKeys: FlatTranslations = {};
   const maskMaps: Record<string, Record<string, string>> = {};
   for (const [key, value] of Object.entries(chunk.keys)) {
-    const { masked, map } = maskPlaceholders(value, customPatterns);
+    // 1) mask do-not-translate terms first (T-prefix range: ⟦T0⟧, ⟦T1⟧…)
+    const termMask = maskTerms(value, noTranslate, 0);
+    // 2) mask placeholders on the already-term-masked string (⟦0⟧, ⟦1⟧…)
+    const { masked, map } = maskPlaceholders(termMask.masked, customPatterns);
     maskedKeys[key] = masked;
-    maskMaps[key] = map;
+    maskMaps[key] = { ...termMask.map, ...map };
   }
   return { maskedChunk: { keys: maskedKeys }, maskMaps };
 }

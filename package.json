@@ -61,6 +61,6 @@
     "@types/node": "^20.0.0",
     "c8": "^11.0.0",
     "esbuild": "^0.28.1",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }

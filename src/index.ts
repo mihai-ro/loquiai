@@ -25,8 +25,8 @@ Options:
   --namespace <name>     Namespace label injected into translation prompts
   --incremental          Only translate new/changed keys (uses a hash sidecar)
   --hash-file <path>     Hash sidecar path (implies --incremental)
-  --glossary             Enable translation memory (uses a glossary sidecar)
-  --glossary-file <path> Glossary sidecar path (implies --glossary)
+  --translation-memory             Enable translation memory (uses a TM sidecar)
+  --translation-memory-file <path> TM sidecar path (implies --translation-memory)
   --dry-run              Preview without calling the API or writing files
   --diff                 Compare source against existing locales, report changes
   --validate             Validate that target locales have the same keys as source
@@ -72,7 +72,7 @@ const VALUE_FLAGS = new Set([
   '--output',
   '--namespace',
   '--hash-file',
-  '--glossary-file',
+  '--translation-memory-file',
 ]);
 
 interface Args {
@@ -86,9 +86,9 @@ interface Args {
   output: string | null;
   namespace: string | null;
   hashFile: string | null;
-  glossaryFile: string | null;
+  translationMemoryFile: string | null;
   incremental: boolean;
-  glossary: boolean;
+  translationMemory: boolean;
   dryRun: boolean;
   diff: boolean;
   validate: boolean;
@@ -123,9 +123,9 @@ function parseArgs(argv: string[]): Args {
     output: flags['--output'] ?? null,
     namespace: flags['--namespace'] ?? null,
     hashFile: flags['--hash-file'] ?? null,
-    glossaryFile: flags['--glossary-file'] ?? null,
+    translationMemoryFile: flags['--translation-memory-file'] ?? null,
     incremental: '--incremental' in flags,
-    glossary: '--glossary' in flags,
+    translationMemory: '--translation-memory' in flags,
     dryRun: '--dry-run' in flags,
     diff: '--diff' in flags,
     validate: '--validate' in flags,
@@ -262,9 +262,9 @@ async function main(): Promise<void> {
     output: args.output ?? undefined,
     namespace: args.namespace ?? undefined,
     hashFile: args.hashFile ?? undefined,
-    glossaryFile: args.glossaryFile ?? undefined,
+    translationMemoryFile: args.translationMemoryFile ?? undefined,
     incremental: args.incremental,
-    glossary: args.glossary,
+    translationMemory: args.translationMemory,
     dryRun: args.dryRun,
     diff: args.diff,
     validate: args.validate,

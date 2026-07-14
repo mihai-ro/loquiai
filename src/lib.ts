@@ -3,17 +3,18 @@ import path from 'node:path';
 import { loadConfig } from './config.js';
 import { diffLocales } from './diff.js';
 import { LoquiError } from './errors.js';
-import { loadGlossary, saveGlossary } from './glossary.js';
+import { buildGlossaryModel } from './glossary.js';
 import { loadHashStore, saveHashStore } from './hasher.js';
+import { loadTranslationMemory, saveTranslationMemory } from './translation-memory.js';
 import { translateJson } from './translator.js';
 import type {
   EngineAdapter,
   FlatTranslations,
-  Glossary,
   HashStore,
   LoquiConfig,
   RunStats,
   TranslationChunk,
+  TranslationMemory,
   TranslationResult,
 } from './types.js';
 import { deepSortKeys, flatten, readJson, unflatten, writeFileAtomic } from './utils/json.js';
@@ -24,7 +25,15 @@ export { BaseEngine } from './engines/base.engine.js';
 export { createEngine } from './engines/factory.js';
 export type { LoquiErrorCode } from './errors.js';
 export { LoquiError } from './errors.js';
-export type { EngineAdapter, FlatTranslations, Glossary, LoquiConfig, RunStats, TranslationChunk, TranslationResult };
+export type {
+  EngineAdapter,
+  FlatTranslations,
+  LoquiConfig,
+  RunStats,
+  TranslationChunk,
+  TranslationMemory,
+  TranslationResult,
+};
 
 export interface TranslateOptions {
   /**
@@ -57,8 +66,8 @@ export interface TranslateOptions {
   incremental?: boolean;
   /** Explicit path for the hash sidecar file. Implies incremental. */
   hashFile?: string;
-  glossary?: boolean;
-  glossaryFile?: string;
+  translationMemory?: boolean;
+  translationMemoryFile?: string;
   force?: boolean;
   /** Preview without calling the API or writing files. */
   dryRun?: boolean;
@@ -122,8 +131,20 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
 
   let sourceFlat: ReturnType<typeof flatten>;
+  let inlineGlossaryTerms: Record<string, Record<string, string>> | undefined;
+  // Only strip the inline `glossary` key when the feature is active and no external path is set.
+  // Without this gate, any namespace legitimately named "glossary" would be silently deleted.
+  const useInlineGlossary = Boolean(config.glossary) && !config.glossary?.path;
   try {
-    sourceFlat = flatten(JSON.parse(inputJson) as Record<string, unknown>);
+    const parsed = JSON.parse(inputJson) as Record<string, unknown>;
+    if (useInlineGlossary && parsed && typeof parsed === 'object' && 'glossary' in parsed) {
+      const raw = parsed.glossary;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        inlineGlossaryTerms = raw as Record<string, Record<string, string>>;
+      }
+      delete parsed.glossary;
+    }
+    sourceFlat = flatten(parsed);
   } catch {
     throw new LoquiError('PARSE_ERROR', 'Failed to parse input as JSON. Make sure it is a valid JSON object.');
   }
@@ -192,16 +213,24 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
       : null);
   const hashStore: HashStore = useIncremental && hashFilePath ? loadHashStore(hashFilePath) : {};
 
-  // load glossary if enabled
-  const useGlossary = options.glossary || Boolean(options.glossaryFile);
-  const glossaryFilePath =
-    options.glossaryFile ??
+  // load translation memory if enabled
+  const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
+  const tmFilePath =
+    options.translationMemoryFile ??
     (inputPath
-      ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-glossary.json`)
+      ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-tm.json`)
       : null);
-  const glossary: Glossary = useGlossary && glossaryFilePath ? loadGlossary(glossaryFilePath) : {};
+  const translationMemory: TranslationMemory =
+    useTranslationMemory && tmFilePath ? loadTranslationMemory(tmFilePath) : {};
 
-  const { translations, updatedHashStore, updatedGlossary, stats } = await translateJson({
+  const glossaryModel = buildGlossaryModel(
+    config.glossary,
+    inlineGlossaryTerms,
+    to,
+    inputPath ? path.dirname(inputPath) : process.cwd(),
+  );
+
+  const { translations, updatedHashStore, updatedTranslationMemory, stats } = await translateJson({
     sourceFlat,
     from,
     to,
@@ -209,8 +238,9 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     config,
     existing,
     hashStore: useIncremental ? hashStore : undefined,
-    glossary: useGlossary ? glossary : undefined,
-    glossaryPath: glossaryFilePath ?? undefined,
+    translationMemory: useTranslationMemory ? translationMemory : undefined,
+    translationMemoryPath: tmFilePath ?? undefined,
+    glossaryModel: glossaryModel ?? undefined,
     force: options.force,
     dryRun: options.dryRun,
     engine: options.engine,
@@ -239,9 +269,9 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     saveHashStore(hashFilePath, updatedHashStore);
   }
 
-  // persist glossary
-  if (useGlossary && glossaryFilePath && !options.dryRun) {
-    saveGlossary(glossaryFilePath, updatedGlossary);
+  // persist translation memory
+  if (useTranslationMemory && tmFilePath && !options.dryRun) {
+    saveTranslationMemory(tmFilePath, updatedTranslationMemory);
   }
 
   return result;

@@ -61,9 +61,12 @@ export abstract class BaseEngine {
     targetLocales: string[],
     sourceLocale: string,
     namespace: string,
+    glossaryBlock = '',
   ): Promise<Record<string, TranslationResult>> {
+    const system = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
+    const withGlossary = glossaryBlock ? `${system}\n${glossaryBlock}` : system;
     return this.makeCall(
-      this.buildSystemPrompt(targetLocales, sourceLocale, namespace),
+      withGlossary,
       this.buildUserPrompt(chunk, targetLocales, sourceLocale),
       Object.keys(chunk.keys),
       targetLocales,
@@ -76,9 +79,12 @@ export abstract class BaseEngine {
     targetLocales: string[],
     sourceLocale: string,
     namespace: string,
+    glossaryBlock = '',
   ): Promise<Record<string, TranslationResult>> {
+    const system = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
+    const withGlossary = glossaryBlock ? `${system}\n${glossaryBlock}` : system;
     return this.makeCall(
-      this.buildSystemPrompt(targetLocales, sourceLocale, namespace),
+      withGlossary,
       this.buildReviewPrompt(chunk, initial, targetLocales, sourceLocale),
       Object.keys(chunk.keys),
       targetLocales,

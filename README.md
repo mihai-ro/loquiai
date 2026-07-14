@@ -244,6 +244,62 @@ Patterns are regex strings. Custom patterns are applied before the built-ins.
 
 ---
 
+## Glossary (term-lock)
+
+Lock specific terms so they always translate consistently, and mark brand/product names that must never be translated.
+
+### Config
+
+```jsonc
+// .loqui.json
+{
+  "glossary": {
+    "path": "glossary",          // folder OR file (optional)
+    "noTranslate": ["Loqui", "GitHub", "OAuth"]
+  }
+}
+```
+
+### Term sources (resolved in priority order)
+
+**1. Per-locale folder** — `glossary.path` points to a directory:
+
+```
+glossary/
+  es.json  →  { "Dashboard": "Tablero", "Settings": "Configuración" }
+  fr.json  →  { "Dashboard": "Tableau de bord" }
+```
+
+**2. Combined file** — `glossary.path` points to a single JSON file:
+
+```json
+{
+  "Dashboard": { "es": "Tablero", "fr": "Tableau de bord" }
+}
+```
+
+**3. Inline source key** — add a `glossary` top-level key directly in your source file. It is stripped before translation and never appears in any output:
+
+```json
+{
+  "glossary": { "Dashboard": { "es": "Tablero" } },
+  "title": "Dashboard overview",
+  "nav.home": "Home"
+}
+```
+
+### How it works
+
+- **`noTranslate`** — terms are hard-masked before the LLM call and restored verbatim afterward (same mechanism as placeholder protection). Guaranteed.
+- **glossary terms** — injected into the system prompt ("use 'Tablero' for 'Dashboard' in es") and verified after translation. If a translation drops the locked term, the key is skipped and retried on the next run.
+- Matching is case-insensitive, word-boundary-aware, and longest-term-first.
+
+### Translation memory (separate feature)
+
+The `--translation-memory` flag (formerly `--glossary`) caches whole-string translations by content hash. It is orthogonal to the terminology glossary — both can be active at the same time.
+
+---
+
 ## Incremental translation
 
 When `--incremental` is set (or `incremental: true` in the API), loqui stores a hash of each source value next to the input file as `.{name}.loqui-hash.json`. On subsequent runs, only keys whose source text changed (or that are missing from the target) are sent to the LLM.

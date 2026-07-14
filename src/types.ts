@@ -48,6 +48,8 @@ export interface LoquiConfig {
   placeholderPatterns?: string[];
   /** Request timeout in milliseconds. Defaults to 120000 (2 minutes). */
   timeout?: number;
+  /** Terminology glossary: lock specific term translations and mark do-not-translate strings. */
+  glossary?: GlossaryConfig;
   /** When true, runs a second LLM pass to review and correct each chunk before saving. Doubles API calls. Default: false. */
   review?: boolean;
 }
@@ -83,7 +85,24 @@ export interface TranslationResult {
 }
 
 export type HashStore = Record<string, string>;
-export type Glossary = Record<string, Record<string, string>>;
+export type TranslationMemory = Record<string, Record<string, string>>;
+
+/** Terminology glossary configuration. All fields optional; absence disables the feature. */
+export interface GlossaryConfig {
+  /** File OR folder. Folder = per-locale term files `{path}/{locale}.json` ({ term: target }).
+   *  File = combined `{ term: { locale: target } }`. Unset = fall back to an inline `glossary`
+   *  key in the source file. */
+  path?: string;
+  /** Strings emitted verbatim in every locale (brand/product names). */
+  noTranslate?: string[];
+}
+
+/** Normalized in-memory glossary used during a run. */
+export interface GlossaryModel {
+  /** term -> { locale -> locked target translation } */
+  terms: Record<string, Record<string, string>>;
+  noTranslate: string[];
+}
 
 /** Runtime statistics collected during a translation run. */
 export interface RunStats {
@@ -104,6 +123,7 @@ export interface EngineAdapter {
     targetLocales: string[],
     sourceLocale: string,
     namespace: string,
+    glossaryBlock?: string,
   ): Promise<Record<string, TranslationResult>>;
   /** Optional self-review pass — called after translateChunk when config.review is true. */
   reviewChunk?(
@@ -112,6 +132,7 @@ export interface EngineAdapter {
     targetLocales: string[],
     sourceLocale: string,
     namespace: string,
+    glossaryBlock?: string,
   ): Promise<Record<string, TranslationResult>>;
   /**
    * optional hook for the AIMD concurrency controller.

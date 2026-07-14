@@ -1,71 +1,102 @@
-import assert from 'node:assert';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { after, describe, it } from 'node:test';
-import { loadGlossary, lookupGlossary, saveGlossary, updateGlossary } from './glossary.js';
+import { describe, it } from 'node:test';
+import {
+  buildGlossaryModel,
+  buildGlossaryPromptBlock,
+  findTermsInText,
+  loadGlossaryTerms,
+  maskTerms,
+} from './glossary.js';
 
-describe('glossary', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loqui-glossary-'));
-  const glossaryPath = path.join(tmpDir, 'glossary.json');
-
-  after(() => {
-    fs.rmSync(tmpDir, { recursive: true });
+describe('findTermsInText', () => {
+  it('matches whole words case-insensitively', () => {
+    assert.deepEqual(findTermsInText('Open the dashboard now', ['Dashboard']), ['Dashboard']);
   });
-
-  it('loadGlossary returns empty object when file does not exist', () => {
-    const glossary = loadGlossary('/nonexistent/path.json');
-    assert.deepStrictEqual(glossary, {});
+  it('does not match substrings', () => {
+    assert.deepEqual(findTermsInText('Githubbing around', ['Git']), []);
   });
-
-  it('loadGlossary loads existing glossary', () => {
-    const data = { abc123: { fr: 'bonjour', de: 'hallo' } };
-    fs.writeFileSync(glossaryPath, JSON.stringify(data, null, 2));
-    const glossary = loadGlossary(glossaryPath);
-    assert.deepStrictEqual(glossary, data);
+  it('returns longest term first when terms overlap', () => {
+    assert.deepEqual(findTermsInText('Use GitHub today', ['Git', 'GitHub']), ['GitHub']);
   });
-
-  it('saveGlossary writes to file', () => {
-    const glossary = { abc123: { fr: 'bonjour' } };
-    saveGlossary(glossaryPath, glossary);
-    const content = JSON.parse(fs.readFileSync(glossaryPath, 'utf-8'));
-    assert.deepStrictEqual(content, glossary);
+  it('matches accented terms (non-ASCII word boundary)', () => {
+    assert.deepEqual(findTermsInText('Öffnen Sie Größe jetzt', ['Größe']), ['Größe']);
   });
-
-  it('lookupGlossary returns translations when all locales present', () => {
-    const glossary = { abc123: { fr: 'bonjour', de: 'hallo' } };
-    const result = lookupGlossary(glossary, 'abc123', ['fr', 'de']);
-    assert.deepStrictEqual(result, { fr: 'bonjour', de: 'hallo' });
+  it('does not match accented term as substring', () => {
+    assert.deepEqual(findTermsInText('Größenordnung', ['Größe']), []);
   });
-
-  it('lookupGlossary returns null when locale missing', () => {
-    const glossary = { abc123: { fr: 'bonjour' } };
-    const result = lookupGlossary(glossary, 'abc123', ['fr', 'de']);
-    assert.strictEqual(result, null);
+  it('does not match term followed immediately by a digit', () => {
+    assert.deepEqual(findTermsInText('Pro2024', ['Pro']), []);
   });
+});
 
-  it('lookupGlossary returns null when hash not found', () => {
-    const glossary = { abc123: { fr: 'bonjour' } };
-    const result = lookupGlossary(glossary, 'notfound', ['fr']);
-    assert.strictEqual(result, null);
+describe('loadGlossaryTerms', () => {
+  it('loads per-locale files from a folder', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gloss-'));
+    fs.mkdirSync(path.join(dir, 'glossary'));
+    fs.writeFileSync(path.join(dir, 'glossary/es.json'), JSON.stringify({ Dashboard: 'Tablero' }));
+    fs.writeFileSync(path.join(dir, 'glossary/fr.json'), JSON.stringify({ Dashboard: 'Tableau de bord' }));
+    const terms = loadGlossaryTerms('glossary', ['es', 'fr'], dir);
+    assert.deepEqual(terms, { Dashboard: { es: 'Tablero', fr: 'Tableau de bord' } });
   });
-
-  it('updateGlossary adds new entry', () => {
-    const glossary: Record<string, Record<string, string>> = {};
-    updateGlossary(glossary, 'abc123', { fr: 'bonjour', de: 'hallo' });
-    assert.deepStrictEqual(glossary, { abc123: { fr: 'bonjour', de: 'hallo' } });
+  it('loads a combined single file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gloss-'));
+    fs.writeFileSync(path.join(dir, 'g.json'), JSON.stringify({ Dashboard: { es: 'Tablero' } }));
+    const terms = loadGlossaryTerms('g.json', ['es'], dir);
+    assert.deepEqual(terms, { Dashboard: { es: 'Tablero' } });
   });
-
-  it('updateGlossary merges with existing entry', () => {
-    const glossary = { abc123: { fr: 'bonjour' } };
-    updateGlossary(glossary, 'abc123', { de: 'hallo' });
-    assert.deepStrictEqual(glossary, { abc123: { fr: 'bonjour', de: 'hallo' } });
+  it('returns empty object when path does not exist', () => {
+    const terms = loadGlossaryTerms('nonexistent.json', ['es'], '/tmp');
+    assert.deepEqual(terms, {});
   });
+});
 
-  it('load/save roundtrip preserves data', () => {
-    const original = { abc123: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
-    saveGlossary(glossaryPath, original);
-    const loaded = loadGlossary(glossaryPath);
-    assert.deepStrictEqual(loaded, original);
+describe('buildGlossaryModel', () => {
+  it('returns null when nothing is configured', () => {
+    assert.equal(buildGlossaryModel(undefined, undefined, ['es'], '/tmp'), null);
+  });
+  it('returns null when config is empty (no terms, no noTranslate)', () => {
+    assert.equal(buildGlossaryModel({}, undefined, ['es'], '/tmp'), null);
+  });
+  it('uses inline terms when path is unset', () => {
+    const model = buildGlossaryModel({ noTranslate: ['Loqui'] }, { Dashboard: { es: 'Tablero' } }, ['es'], '/tmp');
+    assert.deepEqual(model, { terms: { Dashboard: { es: 'Tablero' } }, noTranslate: ['Loqui'] });
+  });
+  it('returns a model with only noTranslate when no terms exist', () => {
+    const model = buildGlossaryModel({ noTranslate: ['Loqui'] }, undefined, ['es'], '/tmp');
+    assert.deepEqual(model, { terms: {}, noTranslate: ['Loqui'] });
+  });
+});
+
+describe('maskTerms', () => {
+  it('masks matched terms with T-sentinels and returns a restore map', () => {
+    const { masked, map, nextCounter } = maskTerms('Open GitHub please', ['GitHub'], 0);
+    assert.equal(masked, 'Open ⟦T0⟧ please');
+    assert.deepEqual(map, { '⟦T0⟧': 'GitHub' });
+    assert.equal(nextCounter, 1);
+  });
+  it('preserves the original casing of the matched occurrence', () => {
+    const { map } = maskTerms('open github', ['GitHub'], 0);
+    assert.deepEqual(map, { '⟦T0⟧': 'github' });
+  });
+  it('is a no-op when no terms match', () => {
+    const { masked, nextCounter } = maskTerms('nothing here', ['GitHub'], 3);
+    assert.equal(masked, 'nothing here');
+    assert.equal(nextCounter, 3);
+  });
+});
+
+describe('buildGlossaryPromptBlock', () => {
+  it('lists only terms present in the chunk text', () => {
+    const terms = { Dashboard: { es: 'Tablero' }, Commit: { es: 'Confirmación' } };
+    const block = buildGlossaryPromptBlock(terms, 'Open the Dashboard', ['es']);
+    assert.match(block, /Dashboard/);
+    assert.match(block, /Tablero/);
+    assert.doesNotMatch(block, /Commit/);
+  });
+  it('returns empty string when no terms apply', () => {
+    assert.equal(buildGlossaryPromptBlock({ Dashboard: { es: 'Tablero' } }, 'nothing', ['es']), '');
   });
 });

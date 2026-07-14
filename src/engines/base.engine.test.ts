@@ -114,6 +114,25 @@ describe('reviewChunk', () => {
     assert.ok(args.userPrompt.includes('"k"'), 'user prompt must include source key');
   });
 
+  test('glossaryBlock is appended to the system prompt when provided', async () => {
+    const engine = new TestableEngine();
+    const block = 'Use these exact term translations (glossary):\n- "Dashboard" -> es: Tablero';
+    await engine.translateChunk({ keys: { k: 'v' } }, ['es'], 'en', 'ns', block);
+    const args = engine.lastCall;
+    if (!args) throw new Error('makeCall must have been called');
+    assert.ok(args.systemPrompt.includes('Dashboard'), 'system prompt must include glossary block');
+    assert.ok(args.systemPrompt.includes('Tablero'), 'system prompt must include locked term');
+  });
+
+  test('empty glossaryBlock does not modify system prompt', async () => {
+    const engine = new TestableEngine();
+    await engine.translateChunk({ keys: { k: 'v' } }, ['es'], 'en', 'ns');
+    const noBlock = engine.lastCall?.systemPrompt ?? '';
+    await engine.translateChunk({ keys: { k: 'v' } }, ['es'], 'en', 'ns', '');
+    const emptyBlock = engine.lastCall?.systemPrompt ?? '';
+    assert.equal(noBlock, emptyBlock);
+  });
+
   test('review prompt differs from translate prompt for same chunk', async () => {
     const engine = new TestableEngine();
     const chunk: TranslationChunk = { keys: { msg: 'Hello' } };

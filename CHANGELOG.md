@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/mihai-ro/loquiai/compare/loqui-v2.1.1...loqui-v2.2.0) (2026-07-14)
+
+
+### Features
+
+* glossary term lock ([#54](https://github.com/mihai-ro/loquiai/issues/54)) ([7fd07e1](https://github.com/mihai-ro/loquiai/commit/7fd07e18224190f48425606f9ee2e8ea71d1ca8e))
+
 ## [2.1.1](https://github.com/mihai-ro/loquiai/compare/loqui-v2.1.0...loqui-v2.1.1) (2026-06-24)
 
 

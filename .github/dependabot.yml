@@ -4,8 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    # No grouping — each action update gets its own PR so security fixes
-    # can be reviewed and merged independently without waiting for a batch.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
+    # codeql-action sub-actions (init/autobuild/analyze) must stay in sync —
+    # grouped so all three bump in one PR. Other actions remain ungrouped.
 
   - package-ecosystem: "npm"
     directory: "/"

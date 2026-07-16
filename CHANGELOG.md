@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.2](https://github.com/mihai-ro/loquiai/compare/loqui-v2.2.1...loqui-v2.2.2) (2026-07-16)
+
+
+### Bug Fixes
+
+* remove hardcoded pnpm version from publish workflow ([#59](https://github.com/mihai-ro/loquiai/issues/59)) ([a6d8b73](https://github.com/mihai-ro/loquiai/commit/a6d8b7349f3339f027cf705f39fc30730dc03c7f))
+
 ## [2.2.1](https://github.com/mihai-ro/loquiai/compare/loqui-v2.2.0...loqui-v2.2.1) (2026-07-16)
 
 

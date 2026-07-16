@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/mihai-ro/loquiai/compare/loqui-v2.2.0...loqui-v2.2.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* glossary config validator ([#57](https://github.com/mihai-ro/loquiai/issues/57)) ([542c4b3](https://github.com/mihai-ro/loquiai/commit/542c4b33fe510df49e54ad289217871715316bd4))
+
 ## [2.2.0](https://github.com/mihai-ro/loquiai/compare/loqui-v2.1.1...loqui-v2.2.0) (2026-07-14)
 
 

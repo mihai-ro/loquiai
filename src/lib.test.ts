@@ -264,6 +264,35 @@ describe('translate — glossary', () => {
     const es = JSON.parse(result.es);
     assert.ok(es.title?.includes('Loqui'), 'Loqui must survive translation verbatim');
   });
+
+  test('rejects invalid inline glossary config before translating', async () => {
+    // loadConfig only validates the file; the inline merge must be re-validated too.
+    await assert.rejects(
+      () =>
+        translate({
+          input: JSON.stringify({ title: 'hello' }),
+          from: 'en',
+          to: ['es'],
+          config: { ...CONFIG_DEFAULTS, glossary: { noTranslate: ['ok', 7] } as never },
+          engine: makeEngine(),
+        }),
+      (err: Error) => err.message.includes("'glossary.noTranslate' must be an array of strings"),
+    );
+  });
+
+  test('rejects inline glossary with empty path', async () => {
+    await assert.rejects(
+      () =>
+        translate({
+          input: JSON.stringify({ title: 'hello' }),
+          from: 'en',
+          to: ['es'],
+          config: { ...CONFIG_DEFAULTS, glossary: { path: '  ' } },
+          engine: makeEngine(),
+        }),
+      (err: Error) => err.message.includes("'glossary.path' must be a non-empty string"),
+    );
+  });
 });
 
 describe('translate — incremental mode', () => {

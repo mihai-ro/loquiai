@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadConfig } from './config.js';
+import { loadConfig, validateConfig } from './config.js';
 import { diffLocales } from './diff.js';
 import { LoquiError } from './errors.js';
 import { buildGlossaryModel } from './glossary.js';
@@ -112,6 +112,9 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   const fileConfig = loadConfig(options.configPath);
   // inline config takes priority over file config
   const config: LoquiConfig = options.config ? { ...fileConfig, ...options.config } : fileConfig;
+  // re-validate the merged result: loadConfig only validated the file, so inline
+  // overrides (glossary, engine, ...) would otherwise reach the run unchecked.
+  if (options.config) validateConfig(config, 'inline config');
 
   const from = options.from ?? config.from;
   if (!from) throw new LoquiError('INVALID_CONFIG', "'from' (source locale) is required. Set it in options or config.");

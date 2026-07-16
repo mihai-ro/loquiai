@@ -20,9 +20,11 @@ const KNOWN_KEYS = new Set([
   'placeholderPatterns',
   'timeout',
   'review',
+  'glossary',
 ]);
 
 const KNOWN_PROMPT_KEYS = new Set(['system', 'user']);
+const KNOWN_GLOSSARY_KEYS = new Set(['path', 'noTranslate']);
 
 /**
  * Load config from:
@@ -157,5 +159,32 @@ export function validateConfig(config: LoquiConfig, source: string): void {
 
   if (config.review !== undefined && typeof config.review !== 'boolean') {
     throw new LoquiError('INVALID_CONFIG', `'review' must be a boolean in ${source}`);
+  }
+
+  if (config.glossary !== undefined) {
+    if (typeof config.glossary !== 'object' || Array.isArray(config.glossary) || config.glossary === null) {
+      throw new LoquiError('INVALID_CONFIG', `'glossary' must be an object in ${source}`);
+    }
+    const unknownGlossaryKeys = Object.keys(config.glossary).filter((k) => !KNOWN_GLOSSARY_KEYS.has(k));
+    if (unknownGlossaryKeys.length > 0) {
+      throw new LoquiError(
+        'INVALID_CONFIG',
+        `Unknown key(s) in 'glossary' in '${source}': ${unknownGlossaryKeys.map((k) => `'${k}'`).join(', ')}. Allowed: path, noTranslate`,
+      );
+    }
+    if (
+      config.glossary.path !== undefined &&
+      (typeof config.glossary.path !== 'string' || config.glossary.path.trim() === '')
+    ) {
+      throw new LoquiError('INVALID_CONFIG', `'glossary.path' must be a non-empty string in ${source}`);
+    }
+    if (config.glossary.noTranslate !== undefined) {
+      if (
+        !Array.isArray(config.glossary.noTranslate) ||
+        config.glossary.noTranslate.some((s) => typeof s !== 'string')
+      ) {
+        throw new LoquiError('INVALID_CONFIG', `'glossary.noTranslate' must be an array of strings in ${source}`);
+      }
+    }
   }
 }

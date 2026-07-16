@@ -249,3 +249,43 @@ describe('loadConfig — optional field validation', () => {
     assert.throws(() => loadConfig(dir), /'timeout' must be/);
   });
 });
+
+describe('loadConfig — glossary validation', () => {
+  test('accepts glossary as a known top-level key', () => {
+    const dir = makeDir();
+    writeConfig(dir, { glossary: { path: './glossary', noTranslate: ['Loqui'] } });
+    const config = loadConfig(dir);
+    assert.equal(config.glossary?.path, './glossary');
+    assert.deepEqual(config.glossary?.noTranslate, ['Loqui']);
+  });
+
+  test('accepts an empty glossary object', () => {
+    const dir = makeDir();
+    writeConfig(dir, { glossary: {} });
+    assert.deepEqual(loadConfig(dir).glossary, {});
+  });
+
+  test('throws when glossary is not an object', () => {
+    const dir = makeDir();
+    writeConfig(dir, { glossary: 'bad' });
+    assert.throws(() => loadConfig(dir), /'glossary' must be an object/);
+  });
+
+  test('throws on unknown key inside glossary', () => {
+    const dir = makeDir();
+    writeConfig(dir, { glossary: { path: './g', badKey: 'x' } });
+    assert.throws(() => loadConfig(dir), /Unknown key.*glossary/);
+  });
+
+  test('throws when glossary.path is not a string', () => {
+    const dir = makeDir();
+    writeConfig(dir, { glossary: { path: 42 } });
+    assert.throws(() => loadConfig(dir), /'glossary.path' must be a non-empty string/);
+  });
+
+  test('throws when glossary.noTranslate is not an array of strings', () => {
+    const dir = makeDir();
+    writeConfig(dir, { glossary: { noTranslate: ['ok', 7] } });
+    assert.throws(() => loadConfig(dir), /'glossary.noTranslate' must be an array of strings/);
+  });
+});

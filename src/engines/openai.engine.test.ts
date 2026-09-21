@@ -159,3 +159,54 @@ describe('buildOpenAIResponseSchema', () => {
     assert.deepEqual(props.ja.required as string[], ['hello']);
   });
 });
+
+describe('OpenAIEngine — truncated response', () => {
+  before(() => {
+    process.env.OPENAI_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  test('throws TRUNCATED instead of returning a partial translation', async () => {
+    const engine = new OpenAIEngine({ ...CONFIG_DEFAULTS, engine: 'openai' });
+    // a cut-off body: only the first key made it, and the JSON never closes
+    engine._setFetch(
+      mockFetch(
+        JSON.stringify({
+          choices: [{ message: { content: '{"fr":{"title":"Bonjour"' }, finish_reason: 'length' }],
+        }),
+      ),
+    );
+
+    await assert.rejects(
+      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED',
+    );
+  });
+
+  test('does not silently fill missing keys with empty strings', async () => {
+    const engine = new OpenAIEngine({ ...CONFIG_DEFAULTS, engine: 'openai' });
+    // valid JSON, but short: without the guard this returns body: ''
+    engine._setFetch(
+      mockFetch(
+        JSON.stringify({
+          choices: [{ message: { content: '{"fr":{"title":"Bonjour"}}' }, finish_reason: 'length' }],
+        }),
+      ),
+    );
+
+    await assert.rejects(
+      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED',
+    );
+  });
+
+  test('a normal finish_reason still succeeds', async () => {
+    const engine = new OpenAIEngine({ ...CONFIG_DEFAULTS, engine: 'openai' });
+    engine._setFetch(mockFetch(successBody));
+
+    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    assert.equal(result.fr.keys.title, 'Bonjour');
+  });
+});

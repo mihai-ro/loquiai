@@ -1,7 +1,7 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
 import { BaseEngine } from './base.engine.js';
-import { fetchWithRetry, sanitizeForDisplay } from './utils.js';
+import { assertComplete, fetchWithRetry, sanitizeForDisplay } from './utils.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const MAX_RETRIES = 5;
@@ -59,6 +59,8 @@ export class GeminiEngine extends BaseEngine {
     );
 
     const data = (await response.json()) as GeminiResponse;
+    assertComplete(data?.candidates?.[0]?.finishReason, 'Gemini');
+
     const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!raw)
       throw new LoquiError(

@@ -1,4 +1,5 @@
 import { LoquiError } from '../errors.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Maximum locales × keys product before engines fall back from structured-output
@@ -31,6 +32,30 @@ export function sanitizeForDisplay(text: string, max = 300): string {
     .replace(/"(?:api[_-]?key|x-api-key|key|token|secret)":\s*"([^"]{16,})"/gi, '"$1":"***REDACTED***"');
 }
 
+/**
+ * Values that mean "stopped because the output token limit was reached", across the
+ * three engines: OpenAI `finish_reason: "length"`, Anthropic `stop_reason: "max_tokens"`,
+ * Gemini `finishReason: "MAX_TOKENS"`.
+ */
+const TRUNCATION_REASONS = new Set(['length', 'max_tokens']);
+
+/**
+ * Fails a response that was cut off by the token limit.
+ *
+ * A truncated body either fails to parse — surfacing as a misleading PARSE_ERROR — or
+ * parses into a short object whose missing keys extractTranslations fills with empty
+ * strings. That is a partial translation, silently saved and billed in full, so it has
+ * to fail loudly instead.
+ */
+export function assertComplete(reason: string | undefined, engineName: string): void {
+  if (reason && TRUNCATION_REASONS.has(reason.toLowerCase())) {
+    throw new LoquiError(
+      'TRUNCATED',
+      `${engineName} stopped at the output token limit (${reason}) — the response was cut off. Lower splitToken to send smaller chunks, or reduce the number of target locales per run.`,
+    );
+  }
+}
+
 export function exponentialBackoff(attempt: number, baseMs = 5_000, maxMs = 120_000): number {
   const exponential = baseMs * 2 ** attempt;
   const jitter = Math.random() * baseMs;
@@ -60,6 +85,21 @@ export interface RetryOptions {
   sleepFn?: (ms: number) => Promise<void>;
 }
 
+/** Statuses the Response constructor refuses to pair with a body. */
+const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+
+/**
+ * Rebuilds a Response around an already-read body, so callers can still use
+ * `.json()` without a second trip to the network.
+ */
+function cloneWithBody(response: Response, body: string): Response {
+  return new Response(NULL_BODY_STATUS.has(response.status) ? null : body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export async function fetchWithRetry(url: string, init: RequestInit, options: RetryOptions = {}): Promise<Response> {
   const {
     maxRetries = 5,
@@ -79,9 +119,15 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
+    let bodyText: string;
 
     try {
-      response = await fetchImpl(url, { ...init, signal: controller.signal });
+      const raw = await fetchImpl(url, { ...init, signal: controller.signal });
+      // The body is read here, while the abort is still armed. Clearing the timeout
+      // as soon as headers arrive leaves the caller's response.json() unbounded, so a
+      // server that answers and then stalls mid-body hangs the run forever.
+      bodyText = await raw.text();
+      response = cloneWithBody(raw, bodyText);
     } catch (err) {
       clearTimeout(timeoutId);
       if ((err as Error).name === 'AbortError') {
@@ -95,8 +141,8 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
           { cause: err },
         );
       const waitMs = exponentialBackoff(attempt);
-      process.stderr.write(
-        `\x1b[2m [retry] ${engineName} network error — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})...\x1b[0m\n`,
+      logger.dim(
+        `[retry] ${engineName} network error — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})...`,
       );
       await sleepImpl(waitMs);
       attempt++;
@@ -109,18 +155,17 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
       if (response.status === 429) onRateLimited?.();
 
       if (attempt >= maxRetries) {
-        const errorText = await response.text();
         const code = response.status === 429 ? 'RATE_LIMIT' : 'INVALID_RESPONSE';
         throw new LoquiError(
           code,
-          `${engineName} ${response.status} after ${maxRetries} retries. ${sanitizeForDisplay(errorText)}`,
+          `${engineName} ${response.status} after ${maxRetries} retries. ${sanitizeForDisplay(bodyText)}`,
         );
       }
 
       const serverDelay = response.status === 429 ? await parseRetryDelay(response) : null;
       const waitMs = serverDelay ?? exponentialBackoff(attempt);
-      process.stderr.write(
-        `\x1b[2m [retry] ${engineName} ${response.status} — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})...\x1b[0m\n`,
+      logger.dim(
+        `[retry] ${engineName} ${response.status} — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})...`,
       );
       await sleepImpl(waitMs);
       attempt++;
@@ -128,9 +173,8 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
       const code = response.status === 401 || response.status === 403 ? 'AUTH' : 'INVALID_RESPONSE';
-      throw new LoquiError(code, `${engineName} API error ${response.status}: ${sanitizeForDisplay(errorText)}`);
+      throw new LoquiError(code, `${engineName} API error ${response.status}: ${sanitizeForDisplay(bodyText)}`);
     }
 
     return response;

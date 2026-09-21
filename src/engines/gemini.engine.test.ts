@@ -170,3 +170,47 @@ describe('buildGeminiResponseSchema', () => {
     assert.deepEqual(jaProp?.required, ['hello']);
   });
 });
+
+describe('GeminiEngine — truncated response', () => {
+  before(() => {
+    process.env.GEMINI_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  test('throws TRUNCATED instead of returning a partial translation', async () => {
+    const engine = new GeminiEngine({ ...CONFIG_DEFAULTS, engine: 'gemini' });
+    engine._setFetch(
+      mockFetch(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"fr":{"greeting":"Bonjour"' }] }, finishReason: 'MAX_TOKENS' }],
+        }),
+      ),
+    );
+
+    await assert.rejects(
+      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED',
+    );
+  });
+
+  test('a normal finishReason still succeeds', async () => {
+    const engine = new GeminiEngine({ ...CONFIG_DEFAULTS, engine: 'gemini' });
+    engine._setFetch(
+      mockFetch(
+        JSON.stringify({
+          candidates: [
+            {
+              content: { parts: [{ text: '{"fr":{"greeting":"Bonjour","farewell":"Au revoir"}}' }] },
+              finishReason: 'STOP',
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    assert.equal(result.fr.keys.greeting, 'Bonjour');
+  });
+});

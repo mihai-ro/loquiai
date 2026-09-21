@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { LoquiError } from '../errors.js';
-import { fetchWithRetry, sanitizeForDisplay, truncate } from './utils.js';
+import { assertComplete, fetchWithRetry, type RetryOptions, sanitizeForDisplay, truncate } from './utils.js';
 
 // Minimal mock response helper.
 function mockResponse(status: number, body = ''): Response {
@@ -265,5 +265,96 @@ describe('fetchWithRetry — 5xx transient retry', () => {
       },
     );
     assert.equal(rateLimitSignals, 1);
+  });
+});
+
+describe('assertComplete', () => {
+  const truncated = (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED';
+
+  test('throws TRUNCATED on the OpenAI reason', () => {
+    assert.throws(() => assertComplete('length', 'OpenAI'), truncated);
+  });
+
+  test('throws TRUNCATED on the Anthropic reason', () => {
+    assert.throws(() => assertComplete('max_tokens', 'Anthropic'), truncated);
+  });
+
+  test('throws TRUNCATED on the Gemini reason regardless of case', () => {
+    assert.throws(() => assertComplete('MAX_TOKENS', 'Gemini'), truncated);
+  });
+
+  test('names the engine and suggests a smaller chunk', () => {
+    assert.throws(
+      () => assertComplete('length', 'OpenAI'),
+      (err: unknown) => err instanceof LoquiError && /OpenAI/.test(err.message) && /splitToken/.test(err.message),
+    );
+  });
+
+  test('passes normal stop reasons through', () => {
+    assert.doesNotThrow(() => assertComplete('stop', 'OpenAI'));
+    assert.doesNotThrow(() => assertComplete('end_turn', 'Anthropic'));
+    assert.doesNotThrow(() => assertComplete('tool_use', 'Anthropic'));
+    assert.doesNotThrow(() => assertComplete('STOP', 'Gemini'));
+  });
+
+  test('passes an absent reason through', () => {
+    assert.doesNotThrow(() => assertComplete(undefined, 'OpenAI'));
+  });
+});
+
+describe('fetchWithRetry — response body timeout', () => {
+  /** Headers arrive, then the body never does — and honours the abort signal, like fetch. */
+  function stallingBody(): RetryOptions['fetchFn'] {
+    return async (_url, init) => {
+      const signal = init.signal as AbortSignal;
+      const body = new ReadableStream({
+        start(controller) {
+          signal.addEventListener('abort', () =>
+            controller.error(new DOMException('The operation was aborted.', 'AbortError')),
+          );
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+  }
+
+  test('times out when the body stalls after the headers arrive', async () => {
+    await assert.rejects(
+      fetchWithRetry('https://example.invalid/v1', {}, { fetchFn: stallingBody(), timeoutMs: 50, maxRetries: 0 }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'TIMEOUT',
+    );
+  });
+
+  test('a normal body is still readable by the caller', async () => {
+    const response = await fetchWithRetry(
+      'https://example.invalid/v1',
+      {},
+      { fetchFn: async () => new Response('{"ok":true}', { status: 200 }) },
+    );
+
+    assert.deepEqual(await response.json(), { ok: true });
+  });
+
+  test('preserves status and headers through the body read', async () => {
+    const response = await fetchWithRetry(
+      'https://example.invalid/v1',
+      {},
+      {
+        fetchFn: async () => new Response('{}', { status: 200, statusText: 'OK', headers: { 'x-request-id': 'abc' } }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-request-id'), 'abc');
+  });
+
+  test('handles a status that cannot carry a body', async () => {
+    const response = await fetchWithRetry(
+      'https://example.invalid/v1',
+      {},
+      { fetchFn: async () => new Response(null, { status: 204 }) },
+    );
+
+    assert.equal(response.status, 204);
   });
 });

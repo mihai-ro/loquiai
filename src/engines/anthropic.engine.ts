@@ -1,7 +1,7 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
 import { BaseEngine } from './base.engine.js';
-import { fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
+import { assertComplete, fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
 
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1';
 const DEFAULT_ANTHROPIC_API_VERSION = '2023-06-01';
@@ -30,7 +30,7 @@ export class AnthropicEngine extends BaseEngine {
 
     const body: Record<string, unknown> = {
       model,
-      max_tokens: 8192,
+      max_tokens: deriveMaxTokens(this.config.splitToken, targetLocales.length),
       temperature: this.config.temperature,
       top_p: this.config.topP,
       system: systemPrompt,
@@ -64,6 +64,7 @@ export class AnthropicEngine extends BaseEngine {
     );
 
     const data = (await response.json()) as AnthropicResponse;
+    assertComplete(data?.stop_reason, 'Anthropic');
 
     const toolBlock = data?.content?.find((b) => b.type === 'tool_use');
     if (toolBlock?.input) {
@@ -81,6 +82,22 @@ export class AnthropicEngine extends BaseEngine {
   }
 }
 
+/**
+ * Anthropic requires an explicit max_tokens, and a constant one truncates as soon as
+ * splitToken or the locale count grows: the reply repeats the chunk once per locale,
+ * wrapped in JSON, and a translation usually runs longer than its source. The floor
+ * keeps small chunks workable; the ceiling stays inside current model output limits.
+ * Past the ceiling the response is cut off, which assertComplete reports as TRUNCATED.
+ */
+const MIN_OUTPUT_TOKENS = 4_096;
+const MAX_OUTPUT_TOKENS = 64_000;
+const OUTPUT_OVERHEAD = 1.5;
+
+export function deriveMaxTokens(splitToken: number, localeCount: number): number {
+  const estimate = Math.ceil(splitToken * Math.max(localeCount, 1) * OUTPUT_OVERHEAD);
+  return Math.min(Math.max(estimate, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS);
+}
+
 /** Builds an Anthropic tool-use input schema for locale → key → string. */
 export function buildAnthropicInputSchema(locales: string[], keys: string[]): Record<string, unknown> {
   const localeProperties: Record<string, unknown> = {};
@@ -91,12 +108,14 @@ export function buildAnthropicInputSchema(locales: string[], keys: string[]): Re
       type: 'object',
       properties: keyProps,
       required: [...keys],
+      additionalProperties: false,
     };
   }
   return {
     type: 'object',
     properties: localeProperties,
     required: [...locales],
+    additionalProperties: false,
   };
 }
 

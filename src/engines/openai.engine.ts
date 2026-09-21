@@ -1,7 +1,7 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
 import { BaseEngine } from './base.engine.js';
-import { fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
+import { assertComplete, fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
 
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const MAX_RETRIES = 5;
@@ -62,6 +62,8 @@ export class OpenAIEngine extends BaseEngine {
     );
 
     const data = (await response.json()) as OpenAIResponse;
+    assertComplete(data?.choices?.[0]?.finish_reason, 'OpenAI');
+
     const raw = data?.choices?.[0]?.message?.content;
     if (!raw)
       throw new LoquiError(

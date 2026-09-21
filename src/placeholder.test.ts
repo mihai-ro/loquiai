@@ -89,3 +89,22 @@ describe('restorePlaceholders', () => {
     assert.equal(restorePlaceholders(masked, map), original);
   });
 });
+
+describe('maskPlaceholders — ICU block limit', () => {
+  test('masks a value with many ICU blocks', () => {
+    const value = Array.from({ length: 200 }, (_, i) => `{n${i}, plural, one {#} other {#}}`).join(' ');
+    const result = maskPlaceholders(value);
+
+    assert.equal(Object.keys(result.map).length, 200);
+    assert.ok(!result.masked.includes('plural'), 'every block should be masked');
+  });
+
+  test('refuses a value past the limit instead of half-masking it', () => {
+    const value = Array.from({ length: 1001 }, (_, i) => `{n${i}, plural, one {#} other {#}}`).join(' ');
+
+    assert.throws(
+      () => maskPlaceholders(value),
+      (err: unknown) => err instanceof Error && /ICU blocks/.test(err.message),
+    );
+  });
+});

@@ -1,6 +1,8 @@
 const MASK_PREFIX = '⟦';
 const MASK_SUFFIX = '⟧';
 const REGEX_CACHE_MAX = 128;
+/** No real translatable value holds this many ICU blocks; see maskIcuBlocks. */
+const ICU_BLOCK_LIMIT = 1000;
 
 function lruGet<K, V>(cache: Map<K, V>, key: K): V | undefined {
   const val = cache.get(key);
@@ -91,8 +93,12 @@ function maskIcuBlocks(input: string, mask: (token: string) => string): string {
   const ICU_START = /\{[a-zA-Z_]\w*\s*,\s*(plural|select|selectordinal)/g;
   let result = input;
 
-  let safetyLimit = 100;
-  while (safetyLimit-- > 0) {
+  // Each pass consumes one block, so the loop terminates on any real string. The cap
+  // only guards against a pathological one — and it has to be loud: returning a
+  // half-masked string would send the remaining ICU blocks to the model unprotected,
+  // where nothing downstream can tell they were ever there.
+  let remaining = ICU_BLOCK_LIMIT;
+  while (remaining-- > 0) {
     ICU_START.lastIndex = 0;
     const match = ICU_START.exec(result);
     if (!match) break;
@@ -102,6 +108,13 @@ function maskIcuBlocks(input: string, mask: (token: string) => string): string {
     if (!full) break;
 
     result = result.slice(0, start) + mask(full) + result.slice(start + full.length);
+  }
+
+  if (remaining < 0) {
+    throw new Error(
+      `More than ${ICU_BLOCK_LIMIT} ICU blocks in a single value — the string is almost certainly malformed. ` +
+        'Refusing to translate it half-masked, which would leave the rest unprotected.',
+    );
   }
 
   return result;

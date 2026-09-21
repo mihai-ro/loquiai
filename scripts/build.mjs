@@ -4,7 +4,7 @@ import esbuild from 'esbuild';
 await esbuild.build({
   bundle: true,
   platform: 'node',
-  target: 'node20',
+  target: 'node22',
   minify: true,
   treeShaking: true,
   splitting: true,
@@ -19,7 +19,7 @@ await Promise.all([
   esbuild.build({
     bundle: true,
     platform: 'node',
-    target: 'node20',
+    target: 'node22',
     minify: true,
     treeShaking: true,
     format: 'cjs',
@@ -29,12 +29,13 @@ await Promise.all([
   esbuild.build({
     bundle: true,
     platform: 'node',
-    target: 'node20',
+    target: 'node22',
     minify: true,
     treeShaking: true,
     format: 'cjs',
     entryPoints: ['src/index.ts'],
+    // No `banner` here: src/index.ts already carries the shebang and esbuild
+    // preserves it. Emitting both makes line 2 a SyntaxError.
     outfile: 'dist/index.cjs',
-    banner: { js: '#!/usr/bin/env node' },
   }),
 ]);

@@ -6,7 +6,9 @@ export type LoquiErrorCode =
   | 'INVALID_RESPONSE'
   | 'PARSE_ERROR'
   | 'CHUNK_FAILED'
-  | 'INVALID_CONFIG';
+  | 'INVALID_CONFIG'
+  | 'TRUNCATED'
+  | 'INVALID_USAGE';
 
 export class LoquiError extends Error {
   readonly code: LoquiErrorCode;
@@ -30,4 +32,6 @@ export const EXIT_CODES: Record<LoquiErrorCode, number> = {
   PARSE_ERROR: 7,
   CHUNK_FAILED: 8,
   INVALID_CONFIG: 9,
+  TRUNCATED: 10,
+  INVALID_USAGE: 11,
 };

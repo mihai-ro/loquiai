@@ -1,6 +1,7 @@
 import { inspect } from 'node:util';
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationChunk, TranslationResult } from '../types.js';
+import { logger } from '../utils/logger.js';
 import { type RetryOptions, sanitizeForDisplay } from './utils.js';
 
 export abstract class BaseEngine {
@@ -187,9 +188,7 @@ export abstract class BaseEngine {
     for (const locale of targetLocales) {
       const localeData = parsed[locale];
       if (!localeData || typeof localeData !== 'object') {
-        process.stderr.write(
-          `\x1b[33m[❗️] Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty\x1b[0m\n`,
-        );
+        logger.warn(`Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty`);
         result[locale] = {
           keys: Object.fromEntries(expectedKeys.map((k) => [k, ''])),
         };
@@ -199,8 +198,8 @@ export abstract class BaseEngine {
       for (const key of expectedKeys) {
         const val = (localeData as Record<string, unknown>)[key];
         if (typeof val !== 'string') {
-          process.stderr.write(
-            `\x1b[33m[❗️] Engine response key "${key}" for locale "${locale}" is not a string (got ${typeof val}) — using empty string\x1b[0m\n`,
+          logger.warn(
+            `Engine response key "${key}" for locale "${locale}" is not a string (got ${typeof val}) — using empty string`,
           );
         }
         keys[key] = typeof val === 'string' ? val : '';

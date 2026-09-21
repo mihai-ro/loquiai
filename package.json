@@ -47,7 +47,7 @@
     "lint:fix": "biome check --fix src/",
     "format": "biome format src/",
     "format:fix": "biome format --write src/",
-    "prepublishOnly": "pnpm test:ci && pnpm clean && pnpm build",
+    "prepublishOnly": "pnpm build && pnpm test:ci",
     "translate": "node dist/index.js"
   },
   "files": [

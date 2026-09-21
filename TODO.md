@@ -12,8 +12,11 @@ loqui is an AI-powered i18n translation engine that uses LLMs (Gemini, OpenAI, A
 - Custom engine support
 - Biome linter + formatter
 - ESM + CJS dual output
-- Node.js ≥20 support
-- Test coverage with c8
+- Node.js ≥22 support
+- Test coverage with c8, including the built CLI artifact
+- Lossless round trip for arrays, numbers, booleans and null
+- Documented exit codes (0–11) with unknown-flag rejection
+- Partial-run recovery: successful chunks are written and resumed from
 
 ## In Progress 🚧
 

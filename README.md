@@ -28,8 +28,9 @@ npx @mihairo/loqui --input en.json --from en --to fr,de,es --output ./i18n/{loca
 - **Placeholder protection** — `{{mustache}}`, `${template}`, `{icu}`, ICU plural/select blocks, HTML tags, and custom patterns are never mutated
 - **Custom prompts** — override system/user prompt templates with your own
 - **Programmatic API** — `import { translate } from '@mihairo/loqui'`
-- **CLI** — pipe-friendly, stdin/stdout support
-- **Zero runtime dependencies** — only the TypeScript compiler for dev
+- **CLI** — pipe-friendly: results go to stdout, every diagnostic to stderr
+- **Structure-preserving** — arrays, numbers, booleans and `null` survive a round trip untouched; only strings are sent to the model
+- **Zero runtime dependencies** — nothing is installed alongside it; the build and test toolchain is dev-only
 
 ---
 
@@ -117,9 +118,45 @@ Options:
   --namespace <name>     Namespace label injected into translation prompts
   --incremental          Only translate new/changed keys (uses a hash sidecar)
   --hash-file <path>     Hash sidecar path (implies --incremental)
+  --translation-memory             Enable translation memory (uses a TM sidecar)
+  --translation-memory-file <path> TM sidecar path (implies --translation-memory)
   --dry-run              Preview without calling the API or writing files
+  --diff                 Compare source against existing locales, report changes
+  --validate             Validate that target locales have the same keys as source
   --force                Re-translate all keys regardless of existing translations
+  --help, -h             Show help
 ```
+
+Options take either form: `--to fr,de` or `--to=fr,de`. An unknown option is an error,
+not a silent no-op — a typo like `--incremetal` exits non-zero rather than quietly
+re-translating the whole file at full price.
+
+### Exit codes
+
+| Code | Name               | Meaning                                                        |
+| ---- | ------------------ | -------------------------------------------------------------- |
+| 0    | —                  | Success                                                          |
+| 1    | —                  | Unexpected error                                                 |
+| 2    | `AUTH`             | Invalid or missing API key                                       |
+| 3    | `RATE_LIMIT`       | Rate limit exhausted after retries                               |
+| 4    | `TIMEOUT`          | Request timed out after retries                                  |
+| 5    | `NETWORK_ERROR`    | Network failure after retries                                    |
+| 6    | `INVALID_RESPONSE` | API returned an unexpected response                              |
+| 7    | `PARSE_ERROR`      | Failed to parse the API response as JSON                         |
+| 8    | `CHUNK_FAILED`     | Some chunks failed; the rest were written                        |
+| 9    | `INVALID_CONFIG`   | `.loqui.json` is missing required fields or has invalid values   |
+| 10   | `TRUNCATED`        | The engine hit its output token limit mid-response               |
+| 11   | `INVALID_USAGE`    | Unknown or malformed command-line option                         |
+
+When every chunk fails the same non-retryable way, that code is reported rather than
+`CHUNK_FAILED` — a bad API key exits `2`, so a caller can tell "fix your key" from
+"retry later".
+
+### Partial runs
+
+If some chunks fail and others succeed, loqui **writes the successful output first**
+and then exits `8`. The hash sidecar records only the keys that actually landed, so
+re-running picks up exactly the gap instead of paying for the whole file again.
 
 ### Examples
 
@@ -218,6 +255,36 @@ for (const ns of namespaces) {
 
 ---
 
+## What gets translated
+
+Only string values are sent to the model. Everything else in the document — numbers,
+booleans, `null`, empty objects and empty arrays — is carried through untouched and
+restored exactly as it was parsed.
+
+```jsonc
+// en.json                              // fr.json
+{                                       {
+  "title": "Welcome",                     "title": "Bienvenue",
+  "items": ["one", "two"],                "items": ["un", "deux"],
+  "maxRetries": 3,                        "maxRetries": 3,
+  "beta": false,                          "beta": false,
+  "note": null                            "note": null
+}                                       }
+```
+
+Arrays are translated element by element and stay arrays. A numeric-looking string
+like `"42"` stays a string. A key that contains a dot (`{"a.b": "…"}`) stays one key
+rather than becoming two levels of nesting.
+
+**Known limitation.** Non-string values always come from the source, so a per-locale
+number or boolean hand-edited into a target file is overwritten on the next run. The
+alternative — letting the target win — would freeze that value permanently, since a
+non-string is never re-translated and so would never pick up a change in the source.
+If you need a genuinely locale-specific non-string, keep it in a file loqui does not
+write.
+
+---
+
 ## Placeholder protection
 
 Tokens that must not be translated are automatically masked before the LLM call and restored afterward.
@@ -300,9 +367,32 @@ The `--translation-memory` flag (formerly `--glossary`) caches whole-string tran
 
 ---
 
+## Inspecting without translating
+
+Both of these report to stderr, write nothing, and make no API calls.
+
+```sh
+# What has been added, removed or changed since the last run
+loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --diff
+
+# Do the target locales have the same key set as the source?
+loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --validate
+```
+
+`--diff` reports **changed** by comparing the current source against the hashes
+recorded by a previous run, so it needs the hash sidecar. Without one it says so and
+reports nothing as changed — there is no record of what the source used to be.
+`--validate` exits `1` when a target locale has missing or extra keys.
+
+---
+
 ## Incremental translation
 
 When `--incremental` is set (or `incremental: true` in the API), loqui stores a hash of each source value next to the input file as `.{name}.loqui-hash.json`. On subsequent runs, only keys whose source text changed (or that are missing from the target) are sent to the LLM.
+
+A key is recorded only once every target locale holds it, so a key that failed stays
+outstanding. Keys deleted from the source are pruned from the sidecar, which therefore
+tracks the source rather than growing forever.
 
 ```sh
 loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --incremental
@@ -435,6 +525,10 @@ await translate({
 | `429` rate limit errors | Too many concurrent requests | Reduce `concurrency` in config (default: 8) |
 | Keys not re-translated after source changes | Hash file has stale values | Run with `--force` once to reset, or delete the `.loqui-hash.json` sidecar |
 | `Failed to parse '.loqui.json'` | Syntax error in config | Validate the JSON at jsonlint.com or similar |
+| `unknown option: --…` (exit 11) | Mistyped flag | The message suggests the closest real flag; `loqui --help` lists them all |
+| `stopped at the output token limit` (exit 10) | Response cut off mid-JSON | Lower `splitToken`, or translate fewer locales per run |
+| `chunk(s) failed` (exit 8) | Some chunks failed after retries | Output for the rest was already written — re-run to retry only the gap |
+| `--diff` reports nothing as changed | No hash sidecar yet | Run once with `--incremental` to start recording source hashes |
 
 ## Performance Tuning
 

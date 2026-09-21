@@ -74,6 +74,19 @@ export const DEFAULT_MODELS: Record<SupportedEngine, string> = {
 /** A flat mapping of dot-notation keys to their string values. */
 export type FlatTranslations = Record<string, string>;
 
+/**
+ * A JSON document split by leaf type so a round trip loses nothing.
+ * Only `strings` is translatable; everything else is carried verbatim.
+ */
+export interface FlatDocument {
+  /** translatable string leaves, dot-keyed. Array elements are keyed positionally. */
+  strings: FlatTranslations;
+  /** non-string leaves — numbers, booleans, null — plus empty arrays and objects. */
+  values: Record<string, unknown>;
+  /** paths that held a non-empty array, so unflatten rebuilds `[]` not `{"0":…}`. */
+  arrayPaths: string[];
+}
+
 /** A batch of keys to translate in a single API call. */
 export interface TranslationChunk {
   keys: FlatTranslations;
@@ -114,6 +127,8 @@ export interface RunStats {
   elapsedMs: number;
   /** Non-fatal warnings emitted during the run. */
   warnings: string[];
+  /** Chunks that failed after all retries. Their keys are absent from the output. */
+  failedChunks: number;
 }
 
 /** Adapter interface for plugging in custom LLM engines. */

@@ -43,8 +43,14 @@ describe('translationMemory', () => {
     assert.deepStrictEqual(result, { fr: 'bonjour', de: 'hallo' });
   });
 
-  it('lookupTranslationMemory returns null when locale missing', () => {
+  it('lookupTranslationMemory returns the locales it has when one is missing', () => {
     const tm = { abc123: { fr: 'bonjour' } };
+    const result = lookupTranslationMemory(tm, 'abc123', ['fr', 'de']);
+    assert.deepStrictEqual(result, { fr: 'bonjour' }, 'de going to the engine must not cost fr its cached hit');
+  });
+
+  it('lookupTranslationMemory returns null when no requested locale is cached', () => {
+    const tm = { abc123: { es: 'hola' } };
     const result = lookupTranslationMemory(tm, 'abc123', ['fr', 'de']);
     assert.strictEqual(result, null);
   });

@@ -23,7 +23,11 @@ export function saveTranslationMemory(tmPath: string, tm: TranslationMemory): vo
 
 /**
  * Looks up a hash in the translation memory.
- * Returns translations for all requested locales if present, otherwise null.
+ *
+ * Returns whatever is cached for the requested locales, which may be a subset —
+ * demanding all of them means a key only `fr` needs misses the memory whenever `de`
+ * happens to lack it, and the caller pays to translate something already known.
+ * Returns null when nothing is cached for any of them.
  */
 export function lookupTranslationMemory(
   tm: TranslationMemory,
@@ -33,14 +37,11 @@ export function lookupTranslationMemory(
   const entry = tm[hash];
   if (!entry) return null;
 
-  const missing = locales.filter((locale) => !(locale in entry));
-  if (missing.length > 0) return null;
-
   const result: Record<string, string> = {};
   for (const locale of locales) {
-    result[locale] = entry[locale];
+    if (locale in entry) result[locale] = entry[locale];
   }
-  return result;
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 /**

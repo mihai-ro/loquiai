@@ -6,44 +6,185 @@ import path from 'node:path';
 import { describe, test } from 'node:test';
 import { deepSortKeys, flatten, unflatten, writeJson } from './json.js';
 
+/** unflatten builds null-prototype containers, so deepEqual has to be the loose one. */
+function roundTrip(original: Record<string, unknown>): void {
+  assertLoose.deepEqual(unflatten(flatten(original)), original);
+}
+
 describe('flatten', () => {
   test('flattens a nested object to dot-notation keys', () => {
-    const result = flatten({ a: { b: { c: 'val' } } });
-    assert.deepEqual(result, { 'a.b.c': 'val' });
+    assert.deepEqual(flatten({ a: { b: { c: 'val' } } }).strings, { 'a.b.c': 'val' });
   });
 
   test('handles multiple top-level keys', () => {
-    const result = flatten({ x: '1', y: { z: '2' } });
-    assert.deepEqual(result, { x: '1', 'y.z': '2' });
-  });
-
-  test('coerces null to empty string', () => {
-    const result = flatten({ key: null } as never);
-    assert.equal(result.key, '');
+    assert.deepEqual(flatten({ x: '1', y: { z: '2' } }).strings, { x: '1', 'y.z': '2' });
   });
 
   test('leaves already-flat objects unchanged', () => {
     const input = { a: 'foo', b: 'bar' };
-    assert.deepEqual(flatten(input), input);
+    assert.deepEqual(flatten(input).strings, input);
+  });
+
+  test('keeps non-string leaves out of the translatable strings', () => {
+    const doc = flatten({ count: 42, enabled: false, missing: null, label: 'Hello' });
+
+    assert.deepEqual(doc.strings, { label: 'Hello' });
+    assert.deepEqual(doc.values, { count: 42, enabled: false, missing: null });
+  });
+
+  test('flattens arrays positionally and records the path', () => {
+    const doc = flatten({ items: ['alpha', 'beta'] });
+
+    assert.deepEqual(doc.strings, { 'items.0': 'alpha', 'items.1': 'beta' });
+    assert.deepEqual(doc.arrayPaths, ['items']);
+  });
+
+  test('escapes a separator that is part of the key itself', () => {
+    const doc = flatten({ nested: { 'a.b': 'dotted' } });
+
+    assert.deepEqual(doc.strings, { 'nested.a\\.b': 'dotted' });
+  });
+
+  test('stores empty containers as leaves so they are not lost', () => {
+    const doc = flatten({ xs: [], o: {} });
+
+    assert.deepEqual(doc.strings, {});
+    assertLoose.deepEqual(doc.values, { xs: [], o: {} });
   });
 });
 
 describe('unflatten', () => {
   test('rebuilds nested structure from dot-notation keys', () => {
-    const result = unflatten({ 'a.b.c': 'val' });
-    assertLoose.deepEqual(result, { a: { b: { c: 'val' } } });
+    assertLoose.deepEqual(unflatten({ strings: { 'a.b.c': 'val' }, values: {}, arrayPaths: [] }), {
+      a: { b: { c: 'val' } },
+    });
   });
 
   test('handles sibling keys at same depth', () => {
-    const result = unflatten({ 'a.x': '1', 'a.y': '2' });
-    assertLoose.deepEqual(result, { a: { x: '1', y: '2' } });
+    assertLoose.deepEqual(unflatten({ strings: { 'a.x': '1', 'a.y': '2' }, values: {}, arrayPaths: [] }), {
+      a: { x: '1', y: '2' },
+    });
+  });
+
+  test('rebuilds an array where the path says array, an object where it does not', () => {
+    const asArray = unflatten({ strings: { 'xs.0': 'a', 'xs.1': 'b' }, values: {}, arrayPaths: ['xs'] });
+    const asObject = unflatten({ strings: { 'xs.0': 'a', 'xs.1': 'b' }, values: {}, arrayPaths: [] });
+
+    assert.ok(Array.isArray((asArray as { xs: unknown }).xs));
+    assert.ok(!Array.isArray((asObject as { xs: unknown }).xs));
+  });
+
+  test('a child path wins over a leaf at the same path, whatever the input order', () => {
+    // what an older loqui wrote into a locale file: the array joined into one string
+    const doc = {
+      strings: { items: 'alpha,beta', 'items.0': 'alpha', 'items.1': 'beta' },
+      values: {},
+      arrayPaths: ['items'],
+    };
+
+    assertLoose.deepEqual(unflatten(doc), { items: ['alpha', 'beta'] });
+
+    const reversed = {
+      strings: { 'items.0': 'alpha', 'items.1': 'beta', items: 'alpha,beta' },
+      values: {},
+      arrayPaths: ['items'],
+    };
+    assertLoose.deepEqual(unflatten(reversed), { items: ['alpha', 'beta'] });
+  });
+
+  test('ignores prototype-polluting key paths', () => {
+    const result = unflatten({ strings: { '__proto__.polluted': 'yes', safe: 'ok' }, values: {}, arrayPaths: [] });
+
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
+    assert.equal((result as { safe: string }).safe, 'ok');
   });
 });
 
 describe('flatten / unflatten roundtrip', () => {
   test('roundtrips deeply nested objects', () => {
-    const original = { greetings: { formal: 'Good day', casual: { morning: 'Hey', evening: 'Hi' } } };
-    assertLoose.deepEqual(unflatten(flatten(original)), original);
+    roundTrip({ greetings: { formal: 'Good day', casual: { morning: 'Hey', evening: 'Hi' } } });
+  });
+
+  test('roundtrips arrays of strings without joining them', () => {
+    roundTrip({ items: ['alpha', 'beta'] });
+  });
+
+  test('roundtrips arrays of non-strings without stringifying them', () => {
+    const result = unflatten(flatten({ nums: [1, 2] })) as { nums: unknown[] };
+
+    assertLoose.deepEqual(result.nums, [1, 2]);
+    assert.equal(typeof result.nums[0], 'number', 'numbers in arrays must not become strings');
+  });
+
+  test('roundtrips numbers and booleans with their types intact', () => {
+    const result = unflatten(flatten({ count: 42, ratio: 0.5, enabled: false })) as Record<string, unknown>;
+
+    assert.equal(result.count, 42);
+    assert.equal(typeof result.count, 'number');
+    assert.equal(result.ratio, 0.5);
+    assert.equal(result.enabled, false);
+    assert.equal(typeof result.enabled, 'boolean');
+  });
+
+  test('keeps a null-valued key present instead of dropping it', () => {
+    const result = unflatten(flatten({ missing: null, other: 'x' })) as Record<string, unknown>;
+
+    assert.ok('missing' in result, 'a null value must not remove its key');
+    assert.equal(result.missing, null);
+  });
+
+  test('keeps a numeric-looking string a string', () => {
+    const result = unflatten(flatten({ version: '42' })) as Record<string, unknown>;
+
+    assert.equal(result.version, '42');
+    assert.equal(typeof result.version, 'string', 'a numeric-looking string must not become a number');
+  });
+
+  test('roundtrips empty arrays and empty objects', () => {
+    roundTrip({ xs: [], o: {}, nested: { inner: [] } });
+  });
+
+  test('roundtrips nested arrays', () => {
+    roundTrip({ grid: [['a', 'b'], ['c']] });
+  });
+
+  test('roundtrips objects inside arrays', () => {
+    roundTrip({ people: [{ name: 'Ada', age: 36 }, { name: 'Alan' }] });
+  });
+
+  test('roundtrips a key that contains the separator', () => {
+    roundTrip({ nested: { 'a.b': 'dotted' } });
+  });
+
+  test('keeps a dotted key distinct from the nesting it looks like', () => {
+    const dotted = unflatten(flatten({ 'a.b': 'literal' })) as Record<string, unknown>;
+    const nested = unflatten(flatten({ a: { b: 'nested' } })) as Record<string, unknown>;
+
+    assert.equal(dotted['a.b'], 'literal');
+    assert.equal(dotted.a, undefined);
+    assert.equal((nested.a as Record<string, unknown>).b, 'nested');
+  });
+
+  test('roundtrips a key that contains a backslash', () => {
+    roundTrip({ 'back\\slash': 'x', 'both\\.mixed': 'y' });
+  });
+
+  test('roundtrips a document mixing every leaf type', () => {
+    roundTrip({
+      items: ['alpha', 'beta'],
+      count: 42,
+      enabled: false,
+      missing: null,
+      empty: [],
+      blank: {},
+      nested: { deep: { list: [1, 'two', true, null] } },
+      label: 'Hello',
+    });
+  });
+
+  test('preserves array order when elements are of mixed types', () => {
+    const result = unflatten(flatten({ mixed: [1, 'two', true, null] })) as { mixed: unknown[] };
+    assertLoose.deepEqual(result.mixed, [1, 'two', true, null]);
   });
 });
 

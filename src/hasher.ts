@@ -26,6 +26,24 @@ export function hashValue(value: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
-export function buildUpdatedHashStore(existing: HashStore, currentHashes: HashStore): HashStore {
-  return { ...existing, ...currentHashes };
+/**
+ * Merges this run's hashes over the stored ones, dropping any key the source no longer
+ * has. Without the prune the sidecar only ever grows, keeping hashes for keys deleted
+ * from the source years ago.
+ *
+ * `sourceKeys` is every key currently in the source, which is not the same as the keys
+ * of `currentHashes` — a key that failed to translate is absent from the latter and
+ * must survive, so the next run still sees it as outstanding rather than new.
+ */
+export function buildUpdatedHashStore(
+  existing: HashStore,
+  currentHashes: HashStore,
+  sourceKeys: Iterable<string> = Object.keys(currentHashes),
+): HashStore {
+  const live = new Set(sourceKeys);
+  const merged: HashStore = {};
+  for (const [key, hash] of Object.entries(existing)) {
+    if (live.has(key)) merged[key] = hash;
+  }
+  return { ...merged, ...currentHashes };
 }

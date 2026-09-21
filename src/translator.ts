@@ -26,7 +26,6 @@ export interface TranslateJobOptions {
   existing?: Record<string, FlatTranslations>;
   hashStore?: HashStore;
   translationMemory?: TranslationMemory;
-  translationMemoryPath?: string;
   glossaryModel?: GlossaryModel;
   force?: boolean;
   dryRun?: boolean;
@@ -38,6 +37,11 @@ export interface TranslateJobResult {
   updatedHashStore: HashStore;
   updatedTranslationMemory: TranslationMemory;
   stats: RunStats;
+  /**
+   * Set when chunks failed. The caller persists what succeeded and then raises this,
+   * so a partial run still leaves its output on disk.
+   */
+  failure?: LoquiError;
 }
 
 export async function translateJson(opts: TranslateJobOptions): Promise<TranslateJobResult> {
@@ -50,7 +54,6 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     existing = {},
     hashStore = {},
     translationMemory: tmOpt,
-    translationMemoryPath: _translationMemoryPath,
     glossaryModel,
     force = false,
     dryRun = false,
@@ -61,10 +64,12 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     apiRequests: 0,
     elapsedMs: 0,
     warnings: [],
+    failedChunks: 0,
   };
   const startTime = Date.now();
 
   const translationMemory = tmOpt ?? {};
+  let failure: LoquiError | undefined;
 
   // Hashes are source-derived — compute once for all keys, regardless of what needs translating.
   // This ensures the hash file is always up to date even on "nothing to do" runs.
@@ -125,19 +130,25 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
 
   for (const key of allKeysNeeded) {
     const hash = sourceHashesForTm[key];
-    const cached = lookupTranslationMemory(translationMemory, hash, activeLocales);
-    if (cached) {
-      tmCache[key] = cached;
-    } else {
+    // A locale is active because of some key; that does not make every key its own.
+    const localesNeeding = activeLocales.filter((locale) => key in keysToTranslatePerLocale[locale]);
+    const cached = lookupTranslationMemory(translationMemory, hash, localesNeeding);
+
+    if (cached) tmCache[key] = cached;
+    // a partial hit still leaves the uncovered locales to the engine
+    if (localesNeeding.some((locale) => !cached?.[locale])) {
       keysNeedingTranslation[key] = sourceFlat[key];
     }
   }
 
   for (const [key, cached] of Object.entries(tmCache)) {
-    for (const locale of activeLocales) {
-      if (!(locale in workingTargets)) workingTargets[locale] = { ...existing[locale] };
+    for (const locale of Object.keys(cached)) {
       workingTargets[locale][key] = cached[locale];
       stats.keysTranslated++;
+      // This locale's need for the key is met. Dropping it here keeps the engine
+      // result for the same key — sent for the locales still missing it — from
+      // overwriting the memory hit, and keeps it out of the TM rewrite below.
+      delete keysToTranslatePerLocale[locale][key];
     }
   }
 
@@ -174,6 +185,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
           total: chunks.length,
           engine,
           activeLocales,
+          keysToTranslatePerLocale,
           from,
           sourceFlat,
           namespace,
@@ -196,13 +208,17 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     try {
       await pool.run(tasks);
     } catch (err) {
-      if (err instanceof AggregateError) {
-        for (const e of err.errors) {
-          logger.warn(`[${namespace}] ${(e as Error).message}`);
-        }
-        throw new LoquiError('CHUNK_FAILED', `${err.errors.length} chunk(s) failed for [${namespace}]`, { cause: err });
+      if (!(err instanceof AggregateError)) throw err;
+      // Every chunk that did succeed was paid for. Record the failure and carry the
+      // partial result out: the caller writes it, and the hash store below records
+      // only what landed, so the next run retries exactly the gap.
+      for (const e of err.errors) {
+        const msg = `[${namespace}] ${(e as Error).message}`;
+        logger.warn(msg);
+        stats.warnings.push(msg);
       }
-      throw err;
+      stats.failedChunks = err.errors.length;
+      failure = collapseChunkFailure(err.errors, chunks.length, namespace);
     }
 
     for (const chunk of chunks) {
@@ -211,17 +227,30 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
         if (!hash) continue;
         const translations: Record<string, string> = {};
         for (const locale of activeLocales) {
+          // Only locales that translated this key now. A locale's untouched existing
+          // value is not a translation of this source hash and must not be recorded
+          // as one; entries merge across runs, so a partial record still accumulates.
+          if (!(key in keysToTranslatePerLocale[locale])) continue;
           const translated = workingTargets[locale]?.[key];
           if (translated) translations[locale] = translated;
         }
-        if (Object.keys(translations).length === activeLocales.length) {
+        if (Object.keys(translations).length > 0) {
           updateTranslationMemory(translationMemory, hash, translations);
         }
       }
     }
   }
 
-  const updatedHashStore = buildUpdatedHashStore(hashStore, currentSourceHashes);
+  // A key counts as done only once every target locale holds it. Recording a hash for
+  // a key a failed chunk never delivered would make the next run skip it forever.
+  const landedHashes: HashStore = {};
+  for (const [key, hash] of Object.entries(currentSourceHashes)) {
+    if (to.every((locale) => Boolean(workingTargets[locale]?.[key]))) landedHashes[key] = hash;
+  }
+  // landedHashes is only what this run delivered; the prune has to be measured against
+  // the whole current source, or a key that failed here would be dropped and come back
+  // looking brand new.
+  const updatedHashStore = buildUpdatedHashStore(hashStore, landedHashes, Object.keys(currentSourceHashes));
 
   stats.elapsedMs = Date.now() - startTime;
   return {
@@ -229,7 +258,26 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     updatedHashStore,
     updatedTranslationMemory: translationMemory,
     stats,
+    failure,
   };
+}
+
+/**
+ * Every chunk failing the same non-retryable way is that failure, not a chunking
+ * problem: a bad API key has to exit AUTH so a caller fixes the key instead of
+ * retrying forever. The task wrapper preserves each chunk's code for exactly this.
+ * A partial or mixed failure stays CHUNK_FAILED, which is what it is.
+ */
+function collapseChunkFailure(errors: unknown[], chunkCount: number, namespace: string): LoquiError {
+  const codes = errors.map((e) => (e instanceof LoquiError ? e.code : undefined));
+  const [first] = codes;
+  if (errors.length === chunkCount && first !== undefined && codes.every((code) => code === first)) {
+    return errors[0] as LoquiError;
+  }
+  return new LoquiError(
+    'CHUNK_FAILED',
+    `${errors.length} chunk(s) failed for [${namespace}]. Output for the chunks that succeeded was written; re-run to retry the rest.`,
+  );
 }
 
 // AIMD concurrency pool
@@ -305,6 +353,8 @@ interface ProcessChunkOptions {
   total: number;
   engine: EngineAdapter;
   activeLocales: string[];
+  /** per locale, the keys that locale actually needs. A chunk is the union across locales. */
+  keysToTranslatePerLocale: Record<string, FlatTranslations>;
   from: string;
   sourceFlat: FlatTranslations;
   namespace: string;
@@ -324,6 +374,7 @@ async function processChunk(opts: ProcessChunkOptions): Promise<void> {
     total,
     engine,
     activeLocales,
+    keysToTranslatePerLocale,
     from,
     sourceFlat,
     namespace,
@@ -354,6 +405,10 @@ async function processChunk(opts: ProcessChunkOptions): Promise<void> {
     const restored = restoreChunk(localeResult.keys, maskMaps);
 
     for (const [key, value] of Object.entries(restored)) {
+      // The chunk holds the union of every locale's needed keys, so a locale is sent
+      // keys it did not ask for. Writing those back would clobber existing values.
+      if (!(key in (keysToTranslatePerLocale[locale] ?? {}))) continue;
+
       if (!value.trim()) {
         const w = `[${namespace}→${locale}] Empty translation for key: "${key}"`;
         logger.warn(w);

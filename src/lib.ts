@@ -9,6 +9,7 @@ import { loadTranslationMemory, saveTranslationMemory } from './translation-memo
 import { translateJson } from './translator.js';
 import type {
   EngineAdapter,
+  FlatDocument,
   FlatTranslations,
   HashStore,
   LoquiConfig,
@@ -17,7 +18,7 @@ import type {
   TranslationMemory,
   TranslationResult,
 } from './types.js';
-import { deepSortKeys, flatten, readJson, unflatten, writeFileAtomic } from './utils/json.js';
+import { deepSortKeys, flatten, readJson, unflatten, withStrings, writeFileAtomic } from './utils/json.js';
 import { logger } from './utils/logger.js';
 import { validateLocales } from './validate.js';
 
@@ -133,7 +134,7 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   const namespace =
     options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
 
-  let sourceFlat: ReturnType<typeof flatten>;
+  let sourceDoc: FlatDocument;
   let inlineGlossaryTerms: Record<string, Record<string, string>> | undefined;
   // Only strip the inline `glossary` key when the feature is active and no external path is set.
   // Without this gate, any namespace legitimately named "glossary" would be silently deleted.
@@ -147,7 +148,7 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
       }
       delete parsed.glossary;
     }
-    sourceFlat = flatten(parsed);
+    sourceDoc = flatten(parsed);
   } catch {
     throw new LoquiError('PARSE_ERROR', 'Failed to parse input as JSON. Make sure it is a valid JSON object.');
   }
@@ -155,18 +156,39 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   // resolve output paths
   const outputPaths = resolveOutputPaths(options.output, to, inputPath);
 
+  const sourceFlat = sourceDoc.strings;
+
   // load existing translations (for missing-key detection)
   const existing: Record<string, FlatTranslations> = {};
+  // the target file's own structure, so anything it holds that the source does not survives a rewrite
+  const existingDocs: Record<string, FlatDocument> = {};
   for (const locale of to) {
     const dest = outputPaths?.[locale];
     if (dest && fs.existsSync(dest)) {
-      existing[locale] = flatten(readJson(dest) as Record<string, unknown>);
+      const doc = flatten(readJson(dest) as Record<string, unknown>);
+      existingDocs[locale] = doc;
+      existing[locale] = doc.strings;
     }
   }
 
+  // Resolved before diff mode, which reads the store to tell a changed source from
+  // a translated value. The translation path below still gates use on --incremental.
+  const useIncremental = options.incremental || Boolean(options.hashFile);
+  const hashFilePath =
+    options.hashFile ??
+    (inputPath
+      ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-hash.json`)
+      : null);
+  const hashStore: HashStore = hashFilePath ? loadHashStore(hashFilePath) : {};
+
   // Diff mode: compare and report without translating
   if (options.diff) {
-    const results = diffLocales(sourceFlat, existing);
+    if (Object.keys(hashStore).length === 0) {
+      logger.warn(
+        'No hash sidecar found — "changed" cannot be reported. Run once with --incremental to start recording source hashes.',
+      );
+    }
+    const results = diffLocales(sourceFlat, existing, hashStore);
     for (const r of results) {
       logger.info(`[${r.locale}]`);
       for (const key of r.added) logger.info(`  + ${key}`);
@@ -207,15 +229,6 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     return {};
   }
 
-  // load hash store if incremental
-  const useIncremental = options.incremental || Boolean(options.hashFile);
-  const hashFilePath =
-    options.hashFile ??
-    (inputPath
-      ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-hash.json`)
-      : null);
-  const hashStore: HashStore = useIncremental && hashFilePath ? loadHashStore(hashFilePath) : {};
-
   // load translation memory if enabled
   const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
   const tmFilePath =
@@ -233,7 +246,7 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     inputPath ? path.dirname(inputPath) : process.cwd(),
   );
 
-  const { translations, updatedHashStore, updatedTranslationMemory, stats } = await translateJson({
+  const { translations, updatedHashStore, updatedTranslationMemory, stats, failure } = await translateJson({
     sourceFlat,
     from,
     to,
@@ -242,7 +255,6 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     existing,
     hashStore: useIncremental ? hashStore : undefined,
     translationMemory: useTranslationMemory ? translationMemory : undefined,
-    translationMemoryPath: tmFilePath ?? undefined,
     glossaryModel: glossaryModel ?? undefined,
     force: options.force,
     dryRun: options.dryRun,
@@ -254,11 +266,17 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   // serialize results
   const result: Record<string, string> = {};
   for (const [locale, flat] of Object.entries(translations)) {
-    result[locale] = `${JSON.stringify(deepSortKeys(unflatten(flat) as Record<string, unknown>), null, 2)}\n`;
+    const doc = withStrings(sourceDoc, flat, existingDocs[locale]);
+    result[locale] = `${JSON.stringify(deepSortKeys(unflatten(doc)), null, 2)}\n`;
   }
 
+  // A run that failed without translating anything has nothing to persist. Writing
+  // anyway would create locale files holding only the source's non-string values,
+  // and would prune the hash sidecar on the strength of a run that never happened.
+  const nothingLanded = failure !== undefined && stats.keysTranslated === 0;
+
   // write output files
-  if (outputPaths && !options.dryRun) {
+  if (outputPaths && !options.dryRun && !nothingLanded) {
     for (const [locale, dest] of Object.entries(outputPaths)) {
       if (result[locale] !== undefined) {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -268,14 +286,18 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   }
 
   // persist hash store
-  if (useIncremental && hashFilePath && !options.dryRun) {
+  if (useIncremental && hashFilePath && !options.dryRun && !nothingLanded) {
     saveHashStore(hashFilePath, updatedHashStore);
   }
 
   // persist translation memory
-  if (useTranslationMemory && tmFilePath && !options.dryRun) {
+  if (useTranslationMemory && tmFilePath && !options.dryRun && !nothingLanded) {
     saveTranslationMemory(tmFilePath, updatedTranslationMemory);
   }
+
+  // Raised only after everything that succeeded has been written, so a partial run
+  // still leaves its output on disk and the next run resumes from the gap.
+  if (failure) throw failure;
 
   return result;
 }
@@ -299,12 +321,15 @@ function resolveOutputPaths(
 }
 
 function logStats(stats: RunStats): void {
+  if (stats.failedChunks > 0) {
+    logger.warn(`${stats.failedChunks} chunk(s) failed — the keys they carried were not translated.`);
+  }
   if (stats.keysTranslated > 0 || stats.warnings.length > 0) {
-    process.stderr.write(
-      `\x1b[2m keys translated: ${stats.keysTranslated} | requests: ${stats.apiRequests} | ${(stats.elapsedMs / 1000).toFixed(1)}s\x1b[0m\n`,
+    logger.dim(
+      `keys translated: ${stats.keysTranslated} | requests: ${stats.apiRequests} | ${(stats.elapsedMs / 1000).toFixed(1)}s`,
     );
   }
   for (const w of stats.warnings) {
-    process.stderr.write(`\x1b[33m[❗️] ${w}\x1b[0m\n`);
+    logger.warn(w);
   }
 }

@@ -380,30 +380,254 @@ describe('ConcurrencyPool — AIMD', () => {
 });
 
 describe('translateJson — chunk failure handling', () => {
-  test('throws LoquiError CHUNK_FAILED when a chunk fails', async () => {
+  /** Fails only for the keys named, so a run can be made to half-succeed. */
+  function flakyEngine(failOn: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        if (Object.keys(chunk.keys).some((k) => failOn.includes(k))) throw new Error('API exploded');
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+          };
+        }
+        return result;
+      },
+    };
+  }
+
+  test('reports the failure in stats instead of discarding the run', async () => {
     const engine: EngineAdapter = {
       async translateChunk() {
         throw new Error('API exploded');
       },
     };
 
-    await assert.rejects(
-      () =>
-        translateJson({
-          sourceFlat: { hello: 'world' },
-          from: 'en',
-          to: ['fr'],
-          namespace: 'test',
-          config,
-          engine,
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof LoquiError);
-        assert.equal(err.code, 'CHUNK_FAILED');
-        assert.ok(err.message.includes('chunk(s) failed'));
-        return true;
+    const { stats } = await translateJson({
+      sourceFlat: { hello: 'world' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine,
+    });
+
+    assert.equal(stats.failedChunks, 1);
+    assert.ok(stats.warnings.some((w) => w.includes('API exploded')));
+  });
+
+  test('keeps the output of the chunks that succeeded', async () => {
+    // splitToken of 1 forces one key per chunk, so one can fail alone
+    const sourceFlat = { keep: 'kept', boom: 'lost' };
+    const { translations, stats } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...config, splitToken: 1 },
+      engine: flakyEngine(['boom']),
+    });
+
+    assert.equal(stats.failedChunks, 1);
+    assert.equal(translations.fr.keep, 'KEPT', 'a paid-for chunk must not be thrown away');
+    assert.equal(translations.fr.boom, undefined);
+  });
+
+  test('records hashes only for keys that reached every locale', async () => {
+    const sourceFlat = { keep: 'kept', boom: 'lost' };
+    const { updatedHashStore } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...config, splitToken: 1 },
+      engine: flakyEngine(['boom']),
+    });
+
+    assert.equal(updatedHashStore.keep, hashValue('kept'));
+    assert.ok(!('boom' in updatedHashStore), 'a hash for an undelivered key would make the next run skip it');
+  });
+
+  test('a key missing from one locale is not recorded as done', async () => {
+    // fr succeeds, de is dropped by the engine entirely
+    const engine: EngineAdapter = {
+      async translateChunk(chunk) {
+        return {
+          fr: { keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])) },
+        };
       },
-    );
+    };
+
+    const { updatedHashStore } = await translateJson({
+      sourceFlat: { hello: 'world' },
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      engine,
+    });
+
+    assert.ok(!('hello' in updatedHashStore));
+  });
+});
+
+describe('translateJson — failure code collapsing', () => {
+  /** Every chunk fails the same way, the way a bad API key behaves. */
+  function alwaysFails(err: Error): EngineAdapter {
+    return {
+      async translateChunk() {
+        throw err;
+      },
+    };
+  }
+
+  test('a uniform non-retryable failure surfaces its own code, not CHUNK_FAILED', async () => {
+    const { failure } = await translateJson({
+      sourceFlat: { hello: 'world' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: alwaysFails(new LoquiError('AUTH', 'OpenAI API error 401: invalid key')),
+    });
+
+    assert.ok(failure instanceof LoquiError);
+    assert.equal(failure.code, 'AUTH', 'a bad key is an auth problem, not a chunking problem');
+    assert.match(failure.message, /invalid key/);
+  });
+
+  test('a mixed failure stays CHUNK_FAILED', async () => {
+    const errors = [new LoquiError('AUTH', 'bad key'), new LoquiError('RATE_LIMIT', 'slow down')];
+    let call = 0;
+    const engine: EngineAdapter = {
+      async translateChunk() {
+        throw errors[call++ % errors.length];
+      },
+    };
+
+    const { failure } = await translateJson({
+      sourceFlat: { a: 'a'.repeat(3000), b: 'b'.repeat(3000) },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...config, splitToken: 500, concurrency: 1 },
+      engine,
+    });
+
+    assert.ok(failure instanceof LoquiError);
+    assert.equal(failure.code, 'CHUNK_FAILED');
+  });
+
+  test('a partial failure stays CHUNK_FAILED even when the codes match', async () => {
+    let call = 0;
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        if (call++ === 0) throw new LoquiError('AUTH', 'bad key');
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'ok'])) };
+        }
+        return result;
+      },
+    };
+
+    const { failure } = await translateJson({
+      sourceFlat: { a: 'a'.repeat(3000), b: 'b'.repeat(3000) },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...config, splitToken: 500, concurrency: 1 },
+      engine,
+    });
+
+    assert.ok(failure instanceof LoquiError);
+    assert.equal(failure.code, 'CHUNK_FAILED', 'something did succeed, so the run was partial');
+  });
+
+  test('a non-LoquiError failure stays CHUNK_FAILED', async () => {
+    const { failure } = await translateJson({
+      sourceFlat: { hello: 'world' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: alwaysFails(new Error('something odd')),
+    });
+
+    assert.equal(failure?.code, 'CHUNK_FAILED');
+  });
+
+  test('a successful run carries no failure', async () => {
+    const { failure } = await translateJson({
+      sourceFlat: { hello: 'world' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: makeEngine(),
+    });
+
+    assert.equal(failure, undefined);
+  });
+});
+
+describe('translateJson — translation memory hit rate', () => {
+  test('a partial memory hit serves the cached locale and sends only the rest', async () => {
+    const sourceFlat = { alpha: 'Alpha' };
+    // fr is cached, de is not
+    const translationMemory = { [hashValue('Alpha')]: { fr: 'FROM-TM-fr' } };
+    const asked: string[][] = [];
+
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        asked.push([...targetLocales]);
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, `ENGINE-${locale}-${v}`])),
+          };
+        }
+        return result;
+      },
+    };
+
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      translationMemory,
+      engine,
+    });
+
+    assert.equal(translations.fr.alpha, 'FROM-TM-fr', 'the cached locale must keep its memory hit');
+    assert.equal(translations.de.alpha, 'ENGINE-de-Alpha');
+    assert.equal(asked.length, 1, 'the uncovered locale still needs one request');
+  });
+
+  test('a full memory hit skips the engine entirely', async () => {
+    let called = false;
+    const engine: EngineAdapter = {
+      async translateChunk() {
+        called = true;
+        return {};
+      },
+    };
+
+    const { translations } = await translateJson({
+      sourceFlat: { alpha: 'Alpha' },
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      translationMemory: { [hashValue('Alpha')]: { fr: 'TM-fr', de: 'TM-de' } },
+      engine,
+    });
+
+    assert.equal(called, false);
+    assert.equal(translations.fr.alpha, 'TM-fr');
+    assert.equal(translations.de.alpha, 'TM-de');
   });
 });
 
@@ -738,5 +962,82 @@ describe('chunkTranslations — key-count bound', () => {
     for (const chunk of chunks) {
       assert.ok(localeCount * Object.keys(chunk.keys).length <= 90);
     }
+  });
+});
+
+describe('translateJson — per-locale key isolation', () => {
+  const sourceFlat = { alpha: 'Alpha', beta: 'Beta' };
+  // de already has alpha, hand-written; it is active only because beta is missing.
+  const existing = { de: { alpha: 'HAND-EDITED-BY-HUMAN' }, fr: {} };
+
+  test('a translated key is not written to a locale that already had it', async () => {
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      existing,
+      engine: makeEngine((v) => `${v}-translated`),
+    });
+
+    assert.equal(translations.de.alpha, 'HAND-EDITED-BY-HUMAN', 'de never requested alpha');
+    assert.equal(translations.de.beta, 'Beta-translated');
+    assert.equal(translations.fr.alpha, 'Alpha-translated');
+    assert.equal(translations.fr.beta, 'Beta-translated');
+  });
+
+  test('a translation-memory hit is not written to a locale that already had the key', async () => {
+    const translationMemory = {
+      [hashValue('Alpha')]: { fr: 'STALE-FROM-TM-fr', de: 'STALE-FROM-TM-de' },
+    };
+
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      existing,
+      translationMemory,
+      engine: makeEngine((v) => `NEW-${v}`),
+    });
+
+    assert.equal(translations.de.alpha, 'HAND-EDITED-BY-HUMAN', 'de never requested alpha');
+    assert.equal(translations.fr.alpha, 'STALE-FROM-TM-fr', 'fr did request alpha, so the TM hit applies');
+    assert.equal(translations.de.beta, 'NEW-Beta');
+  });
+
+  test('--force re-translates every key for every locale', async () => {
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      existing,
+      force: true,
+      engine: makeEngine((v) => `${v}-translated`),
+    });
+
+    assert.equal(translations.de.alpha, 'Alpha-translated', 'force means every locale asked for every key');
+    assert.equal(translations.fr.alpha, 'Alpha-translated');
+  });
+
+  test('translation memory records only what this run translated', async () => {
+    const { updatedTranslationMemory } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      existing,
+      translationMemory: {},
+      engine: makeEngine((v) => `${v}-translated`),
+    });
+
+    const alphaEntry = updatedTranslationMemory[hashValue('Alpha')] ?? {};
+    assert.equal(alphaEntry.fr, 'Alpha-translated');
+    assert.ok(!('de' in alphaEntry), "de's pre-existing value is not a translation of this source hash");
   });
 });

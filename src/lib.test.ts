@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { LoquiError } from './errors.js';
 import { hashValue } from './hasher.js';
 import { translate } from './lib.js';
 import { translateJson } from './translator.js';
@@ -352,5 +353,277 @@ describe('translate — incremental mode', () => {
 
     assert.ok(capturedChunkKeys.farewell !== undefined, 'stale key should be re-translated');
     assert.equal(capturedChunkKeys.greeting, undefined, 'unchanged key should not be sent to engine');
+  });
+});
+
+describe('translate — non-string values survive the round trip', () => {
+  const mixed = {
+    label: 'Hello',
+    items: ['alpha', 'beta'],
+    count: 42,
+    ratio: 0.5,
+    enabled: false,
+    missing: null,
+    empty: [],
+    blank: {},
+    version: '42',
+    nested: { deep: { list: [1, 'two', true, null] } },
+  };
+
+  test('arrays, numbers, booleans and null reach the output file unchanged', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify(mixed), 'utf-8');
+
+    await translate({
+      input,
+      from: 'en',
+      to: ['fr'],
+      output: path.join(dir, '{locale}.json'),
+      engine: makeEngine(),
+    });
+
+    const written = JSON.parse(fs.readFileSync(path.join(dir, 'fr.json'), 'utf-8'));
+
+    assert.deepEqual(written.items, ['ALPHA', 'BETA'], 'arrays stay arrays, element by element');
+    assert.equal(written.count, 42);
+    assert.equal(typeof written.count, 'number');
+    assert.equal(written.ratio, 0.5);
+    assert.equal(written.enabled, false);
+    assert.ok('missing' in written, 'a null value must not lose its key');
+    assert.equal(written.missing, null);
+    assert.deepEqual(written.empty, []);
+    assert.deepEqual(written.blank, {});
+    assert.equal(written.version, '42', 'a numeric-looking string stays a string');
+    assert.equal(typeof written.version, 'string');
+    assert.deepEqual(written.nested.deep.list, [1, 'TWO', true, null]);
+  });
+
+  test('only strings are sent to the engine', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify(mixed), 'utf-8');
+
+    const seen: string[] = [];
+    await translate({
+      input,
+      from: 'en',
+      to: ['fr'],
+      output: path.join(dir, '{locale}.json'),
+      engine: {
+        async translateChunk(chunk, targetLocales) {
+          seen.push(...Object.values(chunk.keys));
+          const result: Record<string, TranslationResult> = {};
+          for (const locale of targetLocales) {
+            result[locale] = {
+              keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+            };
+          }
+          return result;
+        },
+      },
+    });
+
+    assert.deepEqual(seen.sort(), ['Hello', 'alpha', 'beta', 'two', '42'].sort());
+  });
+
+  test('writing over the source file preserves its structure', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify(mixed), 'utf-8');
+
+    await translate({
+      input,
+      from: 'en',
+      to: ['en'],
+      output: path.join(dir, '{locale}.json'),
+      force: true,
+      engine: makeEngine(),
+    });
+
+    const rewritten = JSON.parse(fs.readFileSync(input, 'utf-8'));
+
+    assert.deepEqual(rewritten.items, ['ALPHA', 'BETA']);
+    assert.equal(rewritten.count, 42);
+    assert.equal(rewritten.missing, null);
+    assert.deepEqual(rewritten.empty, []);
+  });
+});
+
+describe('translate — a partial run keeps what it paid for', () => {
+  // Long enough that each key lands in its own chunk at the minimum legal splitToken,
+  // so one chunk can fail while the other succeeds.
+  const KEEP = 'kept '.repeat(400);
+  const BOOM = 'lost '.repeat(400);
+
+  /** Fails only for the keys named, so a run can be made to half-succeed. */
+  function flakyEngine(failOn: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        if (Object.keys(chunk.keys).some((k) => failOn.includes(k))) throw new Error('API exploded');
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+          };
+        }
+        return result;
+      },
+    };
+  }
+
+  test('writes the successful chunks and then reports CHUNK_FAILED', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify({ keep: KEEP, boom: BOOM }), 'utf-8');
+
+    await assert.rejects(
+      translate({
+        input,
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        incremental: true,
+        config: { splitToken: 500 },
+        engine: flakyEngine(['boom']),
+      }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'CHUNK_FAILED',
+    );
+
+    const written = JSON.parse(fs.readFileSync(path.join(dir, 'fr.json'), 'utf-8'));
+    assert.equal(written.keep, KEEP.toUpperCase(), 'the chunk that succeeded was paid for and must reach disk');
+    assert.equal(written.boom, undefined);
+  });
+
+  test('the hash sidecar records only the keys that landed, so the next run retries the gap', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify({ keep: KEEP, boom: BOOM }), 'utf-8');
+    const hashFile = path.join(dir, 'hashes.json');
+
+    await assert.rejects(
+      translate({
+        input,
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        hashFile,
+        config: { splitToken: 500 },
+        engine: flakyEngine(['boom']),
+      }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'CHUNK_FAILED',
+    );
+
+    const hashes = JSON.parse(fs.readFileSync(hashFile, 'utf-8'));
+    assert.ok('keep' in hashes);
+    assert.ok(!('boom' in hashes), 'recording a hash for an undelivered key would strand it');
+
+    // second run: the engine is healthy now and picks up exactly what was missed
+    const seen: string[] = [];
+    await translate({
+      input,
+      from: 'en',
+      to: ['fr'],
+      output: path.join(dir, '{locale}.json'),
+      hashFile,
+      config: { splitToken: 500 },
+      engine: {
+        async translateChunk(chunk, targetLocales) {
+          seen.push(...Object.keys(chunk.keys));
+          const result: Record<string, TranslationResult> = {};
+          for (const locale of targetLocales) {
+            result[locale] = {
+              keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+            };
+          }
+          return result;
+        },
+      },
+    });
+
+    assert.deepEqual(seen, ['boom'], 'only the key that failed should be retried');
+    const written = JSON.parse(fs.readFileSync(path.join(dir, 'fr.json'), 'utf-8'));
+    assert.equal(written.boom, BOOM.toUpperCase());
+    assert.equal(written.keep, KEEP.toUpperCase());
+  });
+});
+
+describe('translate — diff mode', () => {
+  test('a correctly translated key is not reported as changed', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify({ greeting: 'Hello' }), 'utf-8');
+    fs.writeFileSync(path.join(dir, 'fr.json'), JSON.stringify({ greeting: 'Bonjour' }), 'utf-8');
+    const hashFile = path.join(dir, 'hashes.json');
+    fs.writeFileSync(hashFile, JSON.stringify({ greeting: hashValue('Hello') }), 'utf-8');
+
+    // diff writes its report to stderr and returns an empty map
+    const result = await translate({
+      input,
+      from: 'en',
+      to: ['fr'],
+      output: path.join(dir, '{locale}.json'),
+      hashFile,
+      diff: true,
+    });
+
+    assert.deepEqual(result, {});
+  });
+});
+
+describe('translate — a run that fails outright', () => {
+  test('surfaces the underlying code when every chunk failed the same way', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify({ greeting: 'Hello' }), 'utf-8');
+
+    await assert.rejects(
+      translate({
+        input,
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        engine: {
+          async translateChunk() {
+            throw new LoquiError('AUTH', 'OpenAI API error 401: invalid key');
+          },
+        },
+      }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'AUTH',
+    );
+  });
+
+  test('writes nothing when nothing was translated', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify({ greeting: 'Hello', retries: 3 }), 'utf-8');
+    const hashFile = path.join(dir, 'hashes.json');
+
+    await assert.rejects(
+      translate({
+        input,
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        hashFile,
+        engine: {
+          async translateChunk() {
+            throw new LoquiError('AUTH', 'invalid key');
+          },
+        },
+      }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'AUTH',
+    );
+
+    assert.ok(!fs.existsSync(path.join(dir, 'fr.json')), 'a locale file of only non-string values is not output');
+    assert.ok(!fs.existsSync(hashFile), 'a run that did nothing must not rewrite the sidecar');
   });
 });

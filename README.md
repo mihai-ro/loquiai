@@ -88,6 +88,8 @@ All fields are optional. CLI flags always override the config file.
 | `context`             | string                              | —                  | Domain context injected into prompts |
 | `prompts`             | `{ system?, user? }`                | —                  | Custom prompt templates              |
 | `placeholderPatterns` | string[]                            | —                  | Extra regex patterns to protect      |
+| `timeout`             | number (ms)                         | `120000`           | Per-request timeout                  |
+| `review`              | boolean                             | `false`            | Second review pass (2× API calls)    |
 
 Config file is auto-discovered as `.loqui.json` in the current directory.
 
@@ -129,7 +131,10 @@ Options:
 
 Options take either form: `--to fr,de` or `--to=fr,de`. An unknown option is an error,
 not a silent no-op — a typo like `--incremetal` exits non-zero rather than quietly
-re-translating the whole file at full price.
+re-translating the whole file at full price. A value flag with no value
+(`--output --incremental`) and an extra positional argument are errors too: in
+`loqui en.json --to fr de`, `de` would be dropped, so loqui exits `11` naming it
+instead. Pass several locales as `--to fr,de`.
 
 ### Exit codes
 
@@ -139,24 +144,31 @@ re-translating the whole file at full price.
 | 1    | —                  | Unexpected error                                                 |
 | 2    | `AUTH`             | Invalid or missing API key                                       |
 | 3    | `RATE_LIMIT`       | Rate limit exhausted after retries                               |
-| 4    | `TIMEOUT`          | Request timed out after retries                                  |
+| 4    | `TIMEOUT`          | Request timed out                                                |
 | 5    | `NETWORK_ERROR`    | Network failure after retries                                    |
 | 6    | `INVALID_RESPONSE` | API returned an unexpected response                              |
-| 7    | `PARSE_ERROR`      | Failed to parse the API response as JSON                         |
-| 8    | `CHUNK_FAILED`     | Some chunks failed; the rest were written                        |
+| 7    | `PARSE_ERROR`      | A response, the input, or a file on disk is not valid JSON       |
+| 8    | `CHUNK_FAILED`     | Some chunks failed — see [Partial runs](#partial-runs)           |
 | 9    | `INVALID_CONFIG`   | `.loqui.json` is missing required fields or has invalid values   |
 | 10   | `TRUNCATED`        | The engine hit its output token limit mid-response               |
-| 11   | `INVALID_USAGE`    | Unknown or malformed command-line option                         |
+| 11   | `INVALID_USAGE`    | Invalid command-line usage                                       |
 
 When every chunk fails the same non-retryable way, that code is reported rather than
 `CHUNK_FAILED` — a bad API key exits `2`, so a caller can tell "fix your key" from
-"retry later".
+"retry later". A refused API key stops the run at once, keeping what already landed.
 
 ### Partial runs
 
-If some chunks fail and others succeed, loqui **writes the successful output first**
-and then exits `8`. The hash sidecar records only the keys that actually landed, so
-re-running picks up exactly the gap instead of paying for the whole file again.
+If some chunks fail and others succeed:
+
+- With `--output`, loqui **writes the successful output first** and then exits `8`.
+- Without it, nothing is printed — stdout is either complete, valid JSON or empty — and
+  the run exits `8`. Set an output path to keep a partial result.
+- From the API, the rejected error's `partial` holds what did translate
+  (see [Errors](#errors)).
+
+The hash sidecar records only the keys that actually landed, so re-running picks up
+exactly the gap instead of paying for the whole file again.
 
 ### Examples
 
@@ -208,8 +220,12 @@ interface TranslateOptions {
   namespace?: string; // label injected into prompts
   incremental?: boolean; // hash-based change detection
   hashFile?: string; // custom hash sidecar path
+  translationMemory?: boolean; // cache whole-string translations by content hash
+  translationMemoryFile?: string; // custom translation-memory path (implies translationMemory)
   force?: boolean; // re-translate all keys
   dryRun?: boolean; // no API calls or writes
+  diff?: boolean; // report added, removed and changed keys; returns {}
+  validate?: boolean; // check targets have the source's keys; returns {}, sets process.exitCode on a mismatch
   engine?: EngineAdapter; // custom engine instance
   config?: Partial<LoquiConfig>; // inline config overrides
   configPath?: string; // path to config file or directory
@@ -221,6 +237,26 @@ interface TranslateOptions {
 `translate()` returns `Promise<Record<string, string>>` — a map from locale to serialised JSON string.
 
 If `output` is specified, files are written to disk and the same map is still returned.
+
+### Errors
+
+`translate()` rejects with a `LoquiError`. Its `code` is one of the names in the
+[exit-code table](#exit-codes). When some chunks failed and others succeeded, `partial`
+is a locale → JSON string map of what did translate, in the same shape `translate()`
+returns. It is absent when nothing landed.
+
+```typescript
+import { translate, LoquiError } from "@mihairo/loqui";
+
+try {
+  await translate({ input: "./en.json", from: "en", to: ["fr", "de"] });
+} catch (err) {
+  if (err instanceof LoquiError && err.code === "CHUNK_FAILED") {
+    console.warn(Object.keys(err.partial ?? {})); // locales with output to salvage
+  }
+  throw err;
+}
+```
 
 ---
 
@@ -274,7 +310,8 @@ restored exactly as it was parsed.
 
 Arrays are translated element by element and stay arrays. A numeric-looking string
 like `"42"` stays a string. A key that contains a dot (`{"a.b": "…"}`) stays one key
-rather than becoming two levels of nesting.
+rather than becoming two levels of nesting. An empty or whitespace-only string is
+copied to every target as it is and never sent to the model.
 
 **Known limitation.** Non-string values always come from the source, so a per-locale
 number or boolean hand-edited into a target file is overwritten on the next run. The
@@ -296,6 +333,9 @@ Tokens that must not be translated are automatically masked before the LLM call 
 | ICU plural/select   | `{count, plural, one {# item} other {# items}}` |
 | Simple ICU variable | `{name}`                                        |
 | HTML tags           | `<strong>`, `</p>`, `<br/>`                     |
+
+A value whose ICU block is never closed is skipped with a warning that names the key;
+the other keys are still translated.
 
 ### Custom patterns
 
@@ -365,6 +405,8 @@ glossary/
 
 The `--translation-memory` flag (formerly `--glossary`) caches whole-string translations by content hash. It is orthogonal to the terminology glossary — both can be active at the same time.
 
+A memory file written by an earlier version is ignored with a warning, and rebuilt as keys are translated.
+
 ---
 
 ## Inspecting without translating
@@ -390,7 +432,8 @@ reports nothing as changed — there is no record of what the source used to be.
 
 When `--incremental` is set (or `incremental: true` in the API), loqui stores a hash of each source value next to the input file as `.{name}.loqui-hash.json`. On subsequent runs, only keys whose source text changed (or that are missing from the target) are sent to the LLM.
 
-A key is recorded only once every target locale holds it, so a key that failed stays
+A key is recorded only once every target locale that needed it has its new translation —
+a changed key that still holds its old one does not count — so a key that failed stays
 outstanding. Keys deleted from the source are pruned from the sidecar, which therefore
 tracks the source rather than growing forever.
 
@@ -526,8 +569,12 @@ await translate({
 | Keys not re-translated after source changes | Hash file has stale values | Run with `--force` once to reset, or delete the `.loqui-hash.json` sidecar |
 | `Failed to parse '.loqui.json'` | Syntax error in config | Validate the JSON at jsonlint.com or similar |
 | `unknown option: --…` (exit 11) | Mistyped flag | The message suggests the closest real flag; `loqui --help` lists them all |
-| `stopped at the output token limit` (exit 10) | Response cut off mid-JSON | Lower `splitToken`, or translate fewer locales per run |
-| `chunk(s) failed` (exit 8) | Some chunks failed after retries | Output for the rest was already written — re-run to retry only the gap |
+| `stopped at the output token limit` (exit 10) | A single value is too long for the model's output limit. loqui already splits a cut-off chunk and retries the halves | Shorten or split that value, or use a model with a larger output limit |
+| `chunk(s) failed` (exit 8) | Some chunks failed after retries | With an output path, the rest was already written — re-run to retry only the gap. Without one, nothing was saved |
+| `Could not parse <file> as JSON` (exit 7) | A target file, hash sidecar, translation-memory file or glossary file is not valid JSON, for example a merge-conflict marker | loqui stops and leaves the file alone — fix or delete it, then re-run |
+| `unexpected argument: …` or `… needs a value` (exit 11) | An extra positional argument, as in `--to fr de`, or a value flag followed by another flag | Pass locales as `--to fr,de`; give the flag its value, or write it as `--flag=value` |
+| `was not sent for translation` | A source string has an ICU plural/select block that is never closed | Fix the braces in the source string; the other keys are still translated |
+| `returned a body that is not JSON` (exit 6) | A proxy or gateway answered in place of the API | Check any proxy or gateway between you and the API, then re-run |
 | `--diff` reports nothing as changed | No hash sidecar yet | Run once with `--incremental` to start recording source hashes |
 
 ## Performance Tuning

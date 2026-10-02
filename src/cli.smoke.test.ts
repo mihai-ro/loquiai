@@ -108,6 +108,8 @@ describe('built package — what its name resolves to', () => {
     const result = probe("console.log(typeof require('@mihairo/loqui').translate)");
 
     assert.equal(result.stdout.trim(), 'function', `stderr: ${result.stderr}`);
+    // the package is ESM only, so this is the proof that a CommonJS caller still works, quietly
+    assert.doesNotMatch(result.stderr, /ExperimentalWarning/);
   });
 
   test("import('@mihairo/loqui/cli') is not exported, so importing the package can never run the CLI", () => {

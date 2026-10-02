@@ -1,7 +1,9 @@
 # ADR-002: ESM + CJS Dual Output
 
+Superseded on 2026-10-02: the package now requires Node 22.12, where `require()` loads an ES module without a flag as long as its module graph has no top-level await. CommonJS callers keep working without a second bundle, so the package ships ESM only.
+
 ## Status
-Accepted
+Superseded
 
 ## Context
 The JavaScript ecosystem is transitioning from CommonJS to ESM. Many projects still use `require()`, while modern projects prefer `import`. As a library published to npm, we need to support both.

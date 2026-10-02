@@ -42,7 +42,7 @@ npm install @mihairo/loqui
 npm install -g @mihairo/loqui   # for the CLI globally
 ```
 
-Requires **Node.js ≥ 22**.
+Requires **Node.js ≥ 22.12**.
 
 TypeScript users also need `@types/node` 22 or later installed; the type declarations refer to Node's types.
 

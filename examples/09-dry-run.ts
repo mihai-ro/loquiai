@@ -14,7 +14,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 
 const namespaces = ['common', 'auth', 'dashboard'];
-const locales = ['fr', 'de', 'es'];
+const locales = ['es', 'pt', 'de'];
 const I18N_DIR = 'src/assets/i18n';
 
 for (const ns of namespaces) {

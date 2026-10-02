@@ -21,56 +21,47 @@ describe('translationMemory', () => {
   });
 
   it('loadTranslationMemory returns empty object when file does not exist', () => {
-    const tm = loadTranslationMemory('/nonexistent/path.json');
-    assert.deepStrictEqual(tm, {});
+    const { memory, warnings } = loadTranslationMemory('/nonexistent/path.json');
+    assert.deepStrictEqual(memory, {});
+    assert.deepStrictEqual(warnings, []);
   });
 
   it('loadTranslationMemory loads existing translation memory', () => {
     const data = { [memoryKey('hello')]: { fr: 'bonjour', de: 'hallo' } };
     fs.writeFileSync(tmPath, JSON.stringify(data, null, 2));
-    const tm = loadTranslationMemory(tmPath);
-    assert.deepStrictEqual(tm, data);
+    const { memory } = loadTranslationMemory(tmPath);
+    assert.deepStrictEqual(memory, data);
   });
 
-  it('loadTranslationMemory drops entries in the old key format and warns once with the path and count', () => {
+  it('loadTranslationMemory drops entries in the old key format and returns one warning with the path and count', () => {
     const kept = memoryKey('hello');
     fs.writeFileSync(
       tmPath,
       JSON.stringify({ [kept]: { fr: 'bonjour' }, '811c9dc5': { fr: 'old one' }, e8d4a2b1: { fr: 'old two' } }),
     );
-    const warnings: string[] = [];
-    const realWrite = process.stderr.write;
-    process.stderr.write = ((chunk: string) => {
-      warnings.push(String(chunk));
-      return true;
-    }) as typeof process.stderr.write;
-    let tm: ReturnType<typeof loadTranslationMemory>;
-    try {
-      tm = loadTranslationMemory(tmPath);
-    } finally {
-      process.stderr.write = realWrite;
-    }
-
-    assert.deepStrictEqual(tm, { [kept]: { fr: 'bonjour' } });
-    assert.strictEqual(warnings.length, 1, 'one warning, not one per entry');
-    assert.ok(warnings[0].includes(tmPath) && warnings[0].includes('2'), warnings[0]);
-  });
-
-  it('loadTranslationMemory stays quiet when every key is current', () => {
-    fs.writeFileSync(tmPath, JSON.stringify({ [memoryKey('hello')]: { fr: 'bonjour' } }));
     const realWrite = process.stderr.write;
     let wrote = false;
     process.stderr.write = (() => {
       wrote = true;
       return true;
     }) as typeof process.stderr.write;
+    let loaded: ReturnType<typeof loadTranslationMemory>;
     try {
-      loadTranslationMemory(tmPath);
+      loaded = loadTranslationMemory(tmPath);
     } finally {
       process.stderr.write = realWrite;
     }
 
-    assert.strictEqual(wrote, false);
+    assert.deepStrictEqual(loaded.memory, { [kept]: { fr: 'bonjour' } });
+    assert.strictEqual(loaded.warnings.length, 1, 'one warning, not one per entry');
+    assert.ok(loaded.warnings[0].includes(tmPath) && loaded.warnings[0].includes('2'), loaded.warnings[0]);
+    assert.strictEqual(wrote, false, 'loading is data in, data out: it prints nothing');
+  });
+
+  it('loadTranslationMemory returns no warning when every key is current', () => {
+    fs.writeFileSync(tmPath, JSON.stringify({ [memoryKey('hello')]: { fr: 'bonjour' } }));
+
+    assert.deepStrictEqual(loadTranslationMemory(tmPath).warnings, []);
   });
 
   it('memoryKey is 32 lowercase hex characters and stable', () => {
@@ -142,7 +133,7 @@ describe('translationMemory', () => {
   it('load/save roundtrip preserves data', () => {
     const original = { [memoryKey('hello')]: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
     saveTranslationMemory(tmPath, original);
-    const loaded = loadTranslationMemory(tmPath);
-    assert.deepStrictEqual(loaded, original);
+    const { memory } = loadTranslationMemory(tmPath);
+    assert.deepStrictEqual(memory, original);
   });
 });

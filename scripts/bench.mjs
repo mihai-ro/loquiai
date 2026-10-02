@@ -125,6 +125,7 @@ async function runScenario({ name, existing }) {
     config: { ...CONFIG_DEFAULTS },
     existing,
     engine: makeEngine(counts),
+    logger: () => {},
   });
   return { name, requests: counts.requests, requested: counts.values, kept: stats.keysTranslated, ms: performance.now() - start };
 }
@@ -139,14 +140,7 @@ function cpuMs(fn) {
 }
 
 const rows = [];
-const realWrite = process.stderr.write;
-// The translator logs every chunk and warning to stderr; that would drown the table.
-process.stderr.write = () => true;
-try {
-  for (const scenario of scenarios) rows.push(await runScenario(scenario));
-} finally {
-  process.stderr.write = realWrite;
-}
+for (const scenario of scenarios) rows.push(await runScenario(scenario));
 
 const cpu = {
   flatten: cpuMs(() => flatten(sourceDoc)),

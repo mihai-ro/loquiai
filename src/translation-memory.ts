@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { TranslationMemory } from './types.js';
 import { readJson, writeJson } from './utils/json.js';
-import { logger } from './utils/logger.js';
 
 const MEMORY_KEY_FORMAT = /^[0-9a-f]{32}$/;
 
@@ -18,9 +17,10 @@ export function memoryKey(value: string): string {
 
 /**
  * Loads a translation memory from a JSON file.
- * Returns an empty translation memory if the file does not exist.
+ * Returns an empty translation memory if the file does not exist. Warnings come back
+ * as data: the caller's run logs them, so loading prints nothing.
  */
-export function loadTranslationMemory(tmPath: string): TranslationMemory {
+export function loadTranslationMemory(tmPath: string): { memory: TranslationMemory; warnings: string[] } {
   const data = readJson(tmPath) as TranslationMemory;
   // Entries from before keys became memoryKey()s are 8-character hashes that can never
   // match again; keeping them would only carry dead weight into every rewrite.
@@ -30,12 +30,11 @@ export function loadTranslationMemory(tmPath: string): TranslationMemory {
     if (MEMORY_KEY_FORMAT.test(key)) current[key] = entry;
     else dropped++;
   }
-  if (dropped > 0) {
-    logger.warn(
-      `${tmPath}: ignored ${dropped} translation-memory entr${dropped === 1 ? 'y' : 'ies'} in the old key format.`,
-    );
-  }
-  return current;
+  const warnings =
+    dropped > 0
+      ? [`${tmPath}: ignored ${dropped} translation-memory entr${dropped === 1 ? 'y' : 'ies'} in the old key format.`]
+      : [];
+  return { memory: current, warnings };
 }
 
 /**

@@ -131,6 +131,21 @@ describe('built CLI — stdout carries results only', () => {
       `stdout was not valid JSON — a diagnostic leaked into it: ${JSON.stringify(result.stdout)}`,
     );
     assert.match(result.stderr, /\[loqui\] i18n translator/);
+    // progress comes from the library through the logger the CLI hands it
+    assert.match(result.stderr, /Translating 1 key\(s\) → fr/);
+  });
+
+  test('two locales on stdout are one JSON document whose values are objects', () => {
+    const result = spawnSync(process.execPath, [binLink, '{"a":"x"}', '--from', 'en', '--to', 'es,pt', '--dry-run'], {
+      encoding: 'utf-8',
+      cwd: tmpDir,
+    });
+
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(parsed).sort(), ['es', 'pt']);
+    assert.equal(typeof parsed.es, 'object');
+    assert.equal(typeof parsed.pt, 'object');
   });
 
   test('emits no ANSI escapes when stderr is not a TTY', () => {
@@ -140,5 +155,58 @@ describe('built CLI — stdout carries results only', () => {
     });
 
     assert.ok(!result.stderr.includes(ANSI_PREFIX), `stderr carried ANSI escapes: ${JSON.stringify(result.stderr)}`);
+  });
+});
+
+describe('built CLI — --diff and --validate report on stdout', () => {
+  /** A directory with an es.json that lacks `b` and has a stale key. */
+  function target(): string {
+    const dir = fs.mkdtempSync(path.join(tmpDir, 'report-'));
+    fs.writeFileSync(path.join(dir, 'es.json'), JSON.stringify({ a: 'x', stale: 'y' }), 'utf-8');
+    return path.join(dir, '{locale}.json');
+  }
+
+  test('--validate prints the report on stdout, only diagnostics on stderr, and exits 1 on a mismatch', () => {
+    const result = spawnSync(
+      process.execPath,
+      [binLink, '{"a":"x","b":"y"}', '--to', 'es', '--validate', '--output', target()],
+      { encoding: 'utf-8', cwd: tmpDir },
+    );
+
+    assert.equal(result.status, 1, `stderr: ${result.stderr}`);
+    assert.match(result.stdout, /\[es\]/);
+    assert.match(result.stdout, /✗ missing: b/);
+    assert.match(result.stdout, /✗ extra: stale/);
+    assert.match(result.stdout, /Summary: 1 missing, 1 extra, 1 ok/);
+    assert.doesNotMatch(result.stderr, /missing|extra|Summary/);
+  });
+
+  test('--validate exits 0 when the target matches', () => {
+    const dir = fs.mkdtempSync(path.join(tmpDir, 'report-'));
+    fs.writeFileSync(path.join(dir, 'es.json'), JSON.stringify({ a: 'x' }), 'utf-8');
+
+    const result = spawnSync(
+      process.execPath,
+      [binLink, '{"a":"x"}', '--to', 'es', '--validate', '--output', path.join(dir, '{locale}.json')],
+      { encoding: 'utf-8', cwd: tmpDir },
+    );
+
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    assert.match(result.stdout, /Summary: 0 missing, 0 extra, 1 ok/);
+  });
+
+  test('--diff prints the report on stdout and warns about the missing baseline on stderr', () => {
+    const result = spawnSync(
+      process.execPath,
+      [binLink, '{"a":"x","b":"y"}', '--to', 'es', '--diff', '--output', target()],
+      { encoding: 'utf-8', cwd: tmpDir },
+    );
+
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    assert.match(result.stdout, /\[es\]/);
+    assert.match(result.stdout, /\+ b/);
+    assert.match(result.stdout, /Summary: 1 added, 1 removed, 0 changed, 1 unchanged/);
+    assert.match(result.stderr, /No hash sidecar found/);
+    assert.doesNotMatch(result.stderr, /Summary/);
   });
 });

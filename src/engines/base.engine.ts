@@ -1,13 +1,14 @@
 import { inspect } from 'node:util';
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationChunk, TranslationResult } from '../types.js';
-import { logger } from '../utils/logger.js';
+import type { LogFn, LogLevel } from '../utils/logger.js';
 import { type RetryOptions, sanitizeForDisplay } from './utils.js';
 
 export abstract class BaseEngine {
   protected config: LoquiConfig;
   #apiKey: string;
   #rateLimitSignal: (() => void) | undefined;
+  #log: LogFn = () => {};
   #fetchFn: RetryOptions['fetchFn'];
   #sleepFn: RetryOptions['sleepFn'];
 
@@ -29,6 +30,15 @@ export abstract class BaseEngine {
     return this.#rateLimitSignal;
   }
 
+  /** wired by `translateJson` with the run's log. Until then the engine is silent. */
+  setLogger(log: LogFn): void {
+    this.#log = log;
+  }
+
+  protected log(level: LogLevel, message: string): void {
+    this.#log(level, message);
+  }
+
   /**
    * test-only hook — injects fetch/sleep so unit tests avoid real network calls.
    * @internal Not part of the public API; do not call in production code.
@@ -41,8 +51,8 @@ export abstract class BaseEngine {
     this.#sleepFn = sleepFn;
   }
 
-  protected retryHooks(): Pick<RetryOptions, 'fetchFn' | 'sleepFn'> {
-    return { fetchFn: this.#fetchFn, sleepFn: this.#sleepFn };
+  protected retryHooks(): Pick<RetryOptions, 'fetchFn' | 'sleepFn' | 'log'> {
+    return { fetchFn: this.#fetchFn, sleepFn: this.#sleepFn, log: this.#log };
   }
 
   [inspect.custom](): string {
@@ -188,7 +198,10 @@ export abstract class BaseEngine {
     for (const locale of targetLocales) {
       const localeData = parsed[locale];
       if (!localeData || typeof localeData !== 'object') {
-        logger.warn(`Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty`);
+        this.log(
+          'warn',
+          `Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty`,
+        );
         result[locale] = {
           keys: Object.fromEntries(expectedKeys.map((k) => [k, ''])),
         };
@@ -198,7 +211,8 @@ export abstract class BaseEngine {
       for (const key of expectedKeys) {
         const val = (localeData as Record<string, unknown>)[key];
         if (typeof val !== 'string') {
-          logger.warn(
+          this.log(
+            'warn',
             `Engine response key "${key}" for locale "${locale}" is not a string (got ${typeof val}) — using empty string`,
           );
         }

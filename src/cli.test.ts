@@ -4,142 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { after, before, describe, test } from 'node:test';
-import { type InputStream, main, parseArgs, readStdin, run, runInit } from './cli.js';
+import { main, readStdin, run } from './cli.js';
+import type { InputStream } from './cli-init.js';
 import { LoquiError } from './errors.js';
 
 /** parseArgs slices argv like the real process does, so fixtures carry the two leading slots. */
 function argv(...args: string[]): string[] {
   return ['node', 'loqui', ...args];
 }
-
-describe('parseArgs — value flags', () => {
-  test('reads every value flag', () => {
-    const args = parseArgs(
-      argv(
-        '--input',
-        'en.json',
-        '--config',
-        './cfg',
-        '--from',
-        'en',
-        '--to',
-        'fr,de',
-        '--engine',
-        'openai',
-        '--model',
-        'gpt-5',
-        '--context',
-        'a webshop',
-        '--output',
-        './i18n/{locale}.json',
-        '--namespace',
-        'checkout',
-        '--hash-file',
-        './h.json',
-        '--translation-memory-file',
-        './tm.json',
-      ),
-    );
-
-    assert.equal(args.input, 'en.json');
-    assert.equal(args.config, './cfg');
-    assert.equal(args.from, 'en');
-    assert.equal(args.to, 'fr,de');
-    assert.equal(args.engine, 'openai');
-    assert.equal(args.model, 'gpt-5');
-    assert.equal(args.context, 'a webshop');
-    assert.equal(args.output, './i18n/{locale}.json');
-    assert.equal(args.namespace, 'checkout');
-    assert.equal(args.hashFile, './h.json');
-    assert.equal(args.translationMemoryFile, './tm.json');
-  });
-
-  test('a value flag with no following token is rejected, naming the flag', () => {
-    assert.throws(
-      () => parseArgs(argv('--from')),
-      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes('--from'),
-    );
-  });
-
-  test('does not consume the next flag as a positional', () => {
-    const args = parseArgs(argv('--from', 'en', '--dry-run'));
-    assert.equal(args.from, 'en');
-    assert.equal(args.dryRun, true);
-    assert.equal(args.input, null);
-  });
-});
-
-describe('parseArgs — boolean flags', () => {
-  test('all booleans default to false', () => {
-    const args = parseArgs(argv());
-    assert.deepEqual(
-      {
-        incremental: args.incremental,
-        translationMemory: args.translationMemory,
-        dryRun: args.dryRun,
-        diff: args.diff,
-        validate: args.validate,
-        force: args.force,
-        help: args.help,
-      },
-      {
-        incremental: false,
-        translationMemory: false,
-        dryRun: false,
-        diff: false,
-        validate: false,
-        force: false,
-        help: false,
-      },
-    );
-  });
-
-  test('sets each boolean when present', () => {
-    const args = parseArgs(
-      argv('--incremental', '--translation-memory', '--dry-run', '--diff', '--validate', '--force'),
-    );
-    assert.equal(args.incremental, true);
-    assert.equal(args.translationMemory, true);
-    assert.equal(args.dryRun, true);
-    assert.equal(args.diff, true);
-    assert.equal(args.validate, true);
-    assert.equal(args.force, true);
-  });
-
-  test('accepts --help and the -h alias', () => {
-    assert.equal(parseArgs(argv('--help')).help, true);
-    assert.equal(parseArgs(argv('-h')).help, true);
-  });
-});
-
-describe('parseArgs — input resolution', () => {
-  test('falls back to the first positional argument', () => {
-    assert.equal(parseArgs(argv('{"a":"b"}', '--from', 'en')).input, '{"a":"b"}');
-  });
-
-  test('a positional beside --input is rejected, naming it, rather than dropped', () => {
-    assert.throws(
-      () => parseArgs(argv('positional.json', '--input', 'flag.json')),
-      (err: unknown) =>
-        err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes('positional.json'),
-    );
-  });
-
-  test('--input with a trailing locale names the locale', () => {
-    assert.throws(
-      () => parseArgs(argv('--input', 'en.json', '--to', 'fr', 'de')),
-      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes('de'),
-    );
-  });
-
-  test('--input= is the same flag as --input', () => {
-    assert.throws(() => parseArgs(argv('--input=en.json', 'de')), LoquiError);
-  });
-
-  test('input is null when nothing is supplied', () => {
-    assert.equal(parseArgs(argv()).input, null);
-  });
-});
 
 interface Streams {
   out: string;
@@ -223,11 +95,12 @@ describe('main — stream separation', () => {
       );
     });
 
-    const parsed = JSON.parse(streams.out) as Record<string, string>;
+    const parsed = JSON.parse(streams.out) as Record<string, Record<string, string>>;
     assert.deepEqual(Object.keys(parsed).sort(), ['de', 'fr']);
+    assert.equal(typeof parsed.fr, 'object', 'each locale is a document, not a JSON string');
   });
 
-  test('--diff writes its report to stderr and nothing to stdout', async () => {
+  test('--diff writes its report to stdout and nothing but diagnostics to stderr', async () => {
     // diff only reports on locales that already have a file, so give it one
     const diffDir = path.join(tmpDir, 'diff');
     fs.mkdirSync(diffDir, { recursive: true });
@@ -251,9 +124,9 @@ describe('main — stream separation', () => {
       );
     });
 
-    assert.equal(streams.out, '');
-    assert.match(streams.err, /\[fr\]/);
-    assert.match(streams.err, /Summary:/);
+    assert.match(streams.out, /\[fr\]/);
+    assert.match(streams.out, /Summary:/);
+    assert.doesNotMatch(streams.err, /\[fr\]|Summary:/);
   });
 
   test('--validate with no existing locale files warns on stderr only', async () => {
@@ -267,8 +140,24 @@ describe('main — stream separation', () => {
     assert.match(streams.err, /No existing translation files found to validate/);
   });
 
-  test('--output reports success on stderr instead of dumping JSON', async () => {
+  test('--output reports the files it wrote on stderr instead of dumping JSON', async () => {
+    // already translated, so nothing is sent and no engine is needed; the file is still written
     const outDir = path.join(tmpDir, 'out');
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(outDir, 'fr.json'), JSON.stringify({ a: 'x' }), 'utf-8');
+    const streams = await captureStreams(async (stdout) => {
+      await withArgv(
+        ['{"a":"x"}', '--from', 'en', '--to', 'fr', '--output', path.join(outDir, '{locale}.json'), '--config', tmpDir],
+        () => main({ stdout }),
+      );
+    });
+
+    assert.equal(streams.out, '');
+    assert.match(streams.err, /Done\. Wrote 1 locale file\(s\)/);
+  });
+
+  test('a dry run with --output says nothing was written', async () => {
+    const outDir = path.join(tmpDir, 'out-dry');
     const streams = await captureStreams(async (stdout) => {
       await withArgv(
         [
@@ -288,7 +177,9 @@ describe('main — stream separation', () => {
     });
 
     assert.equal(streams.out, '');
-    assert.match(streams.err, /Done\. Wrote 1 locale file\(s\)/);
+    assert.match(streams.err, /Dry run — nothing was written/);
+    assert.doesNotMatch(streams.err, /Wrote/);
+    assert.equal(fs.existsSync(outDir), false);
   });
 });
 
@@ -347,35 +238,6 @@ function sink(): NodeJS.WritableStream & { text: () => string } {
   return Object.assign(stream, { text: () => chunks.join('') });
 }
 
-/** readline only sees a line while a question is pending, so a prompt looks like `…: ` or `…] `. */
-const PROMPT = /[:\]] $/;
-
-/**
- * Drives the interactive wizard: each answer is written only once its prompt has
- * been printed. Queueing them up front would lose every line but the first,
- * because readline discards input that arrives between questions.
- */
-function wizardIO(answers: string[]): { input: InputStream; output: NodeJS.WritableStream; text: () => string } {
-  const input = new PassThrough() as PassThrough & { isTTY?: boolean };
-  input.isTTY = true;
-  const queue = [...answers];
-  const chunks: string[] = [];
-
-  const output = new Writable({
-    write(chunk, _encoding, callback) {
-      const text = String(chunk);
-      chunks.push(text);
-      if (PROMPT.test(text)) {
-        const next = queue.shift();
-        if (next !== undefined) setImmediate(() => input.write(next));
-      }
-      callback();
-    },
-  });
-
-  return { input: input as InputStream, output, text: () => chunks.join('') };
-}
-
 describe('readStdin', () => {
   test('resolves with the trimmed stream contents', async () => {
     assert.equal(await readStdin(fakeStdin(['  {"a":', '"b"}  \n'])), '{"a":"b"}');
@@ -416,161 +278,6 @@ describe('main — stdin input', () => {
       (err: unknown) =>
         err instanceof LoquiError && err.code === 'INVALID_USAGE' && /empty input from stdin/.test(err.message),
     );
-  });
-});
-
-describe('runInit', () => {
-  test('refuses to run outside an interactive terminal', async () => {
-    await assert.rejects(
-      runInit({ input: fakeStdin([]), output: sink(), cwd: tmpDir }),
-      (err: unknown) =>
-        err instanceof LoquiError && err.code === 'INVALID_USAGE' && /interactive terminal/.test(err.message),
-    );
-  });
-
-  test('writes a config from the answers given', async () => {
-    const initDir = path.join(tmpDir, 'init-answers');
-    fs.mkdirSync(initDir, { recursive: true });
-    const io = wizardIO(['openai\n', 'gpt-5-mini\n', 'en\n', 'fr, de\n', 'a checkout flow\n']);
-
-    await runInit({ input: io.input, output: io.output, cwd: initDir });
-
-    const written = JSON.parse(fs.readFileSync(path.join(initDir, '.loqui.json'), 'utf-8')) as Record<string, unknown>;
-    assert.equal(written.engine, 'openai');
-    assert.equal(written.model, 'gpt-5-mini');
-    assert.equal(written.from, 'en');
-    assert.deepEqual(written.to, ['fr', 'de']);
-    assert.equal(written.context, 'a checkout flow');
-    assert.match(io.text(), /OPENAI_API_KEY/);
-  });
-
-  test('falls back to the defaults on empty answers and omits an empty context', async () => {
-    const initDir = path.join(tmpDir, 'init-defaults');
-    fs.mkdirSync(initDir, { recursive: true });
-
-    const io = wizardIO(['\n', '\n', '\n', '\n', '\n']);
-    await runInit({ input: io.input, output: io.output, cwd: initDir });
-
-    const written = JSON.parse(fs.readFileSync(path.join(initDir, '.loqui.json'), 'utf-8')) as Record<string, unknown>;
-    assert.equal(written.engine, 'gemini');
-    assert.equal(written.from, 'en');
-    assert.deepEqual(written.to, ['fr', 'de', 'es']);
-    assert.ok(!('context' in written), 'an empty context should not be written');
-  });
-
-  test('rejects an unknown engine with INVALID_USAGE and releases the terminal first', async () => {
-    const initDir = path.join(tmpDir, 'init-bad-engine');
-    fs.mkdirSync(initDir, { recursive: true });
-    const io = wizardIO(['klingon\n']);
-
-    await assert.rejects(
-      runInit({ input: io.input, output: io.output, cwd: initDir }),
-      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && /Unknown engine/.test(err.message),
-    );
-
-    assert.ok(io.input.isPaused(), 'readline must be closed, or the process never exits');
-  });
-
-  test('leaves an existing config alone when the overwrite prompt is declined', async () => {
-    const initDir = path.join(tmpDir, 'init-existing');
-    fs.mkdirSync(initDir, { recursive: true });
-    const configPath = path.join(initDir, '.loqui.json');
-    fs.writeFileSync(configPath, '{"from":"keep-me"}', 'utf-8');
-    const io = wizardIO(['n\n']);
-
-    await runInit({ input: io.input, output: io.output, cwd: initDir });
-
-    assert.equal(fs.readFileSync(configPath, 'utf-8'), '{"from":"keep-me"}');
-    assert.match(io.text(), /Aborted/);
-  });
-
-  test('overwrites an existing config when the prompt is accepted', async () => {
-    const initDir = path.join(tmpDir, 'init-overwrite');
-    fs.mkdirSync(initDir, { recursive: true });
-    const configPath = path.join(initDir, '.loqui.json');
-    fs.writeFileSync(configPath, '{"from":"stale"}', 'utf-8');
-
-    const io = wizardIO(['y\n', 'anthropic\n', '\n', 'en\n', 'nl\n', '\n']);
-    await runInit({ input: io.input, output: io.output, cwd: initDir });
-
-    const written = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
-    assert.equal(written.engine, 'anthropic');
-    assert.deepEqual(written.to, ['nl']);
-  });
-});
-
-describe('parseArgs — unknown and malformed options', () => {
-  const invalidUsage = (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE';
-
-  test('rejects an unknown option instead of ignoring it', () => {
-    assert.throws(() => parseArgs(argv('--nonsense')), invalidUsage);
-  });
-
-  test('suggests the flag a typo was reaching for', () => {
-    assert.throws(
-      () => parseArgs(argv('--incremetal')),
-      (err: unknown) => err instanceof LoquiError && err.message.includes('--incremental'),
-    );
-  });
-
-  test('points at --help when nothing is close', () => {
-    assert.throws(
-      () => parseArgs(argv('--wildly-wrong')),
-      (err: unknown) => err instanceof LoquiError && err.message.includes('--help'),
-    );
-  });
-
-  test('rejects a value attached to a boolean flag', () => {
-    assert.throws(() => parseArgs(argv('--dry-run=yes')), invalidUsage);
-  });
-
-  test('a lone dash is rejected rather than read as input', () => {
-    assert.throws(() => parseArgs(argv('-')), invalidUsage);
-  });
-});
-
-describe('parseArgs — a token that would be silently dropped', () => {
-  const rejects = (token: string) => (err: unknown) =>
-    err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes(token);
-
-  test('a second positional is rejected, naming it', () => {
-    assert.throws(() => parseArgs(argv('en.json', '--to', 'fr', 'de')), rejects('de'));
-  });
-
-  test('a value flag followed by a boolean flag is rejected rather than eating it', () => {
-    assert.throws(() => parseArgs(argv('--output', '--incremental')), rejects('--output'));
-  });
-
-  test('a value flag followed by another value flag is rejected', () => {
-    assert.throws(() => parseArgs(argv('--from', '--to', 'fr')), rejects('--from'));
-  });
-
-  test('a value that looks like a flag but is not one stays legal', () => {
-    assert.equal(parseArgs(argv('--context', '--not-a-flag')).context, '--not-a-flag');
-  });
-
-  test('the = form takes a known flag name as a plain value', () => {
-    assert.equal(parseArgs(argv('--output=--incremental')).output, '--incremental');
-  });
-});
-
-describe('parseArgs — the --flag=value form', () => {
-  test('reads a value attached with =', () => {
-    const args = parseArgs(argv('--from=en', '--to=fr,de'));
-    assert.equal(args.from, 'en');
-    assert.equal(args.to, 'fr,de');
-  });
-
-  test('keeps an = that is part of the value', () => {
-    assert.equal(parseArgs(argv('--context=a=b')).context, 'a=b');
-  });
-
-  test('accepts an empty value', () => {
-    assert.equal(parseArgs(argv('--context=')).context, '');
-  });
-
-  test('a value starting with a dash is still consumed in the spaced form', () => {
-    assert.equal(parseArgs(argv('--context', '--not-a-flag')).context, '--not-a-flag');
   });
 });
 
@@ -621,5 +328,136 @@ describe('main — usage errors', () => {
 
     assert.equal(observed, 11);
     assert.match(err, /unknown option/);
+  });
+});
+
+describe('main — what the CLI still says on stderr', () => {
+  test('a dry run shows the run progress the library now hands to the logger', async () => {
+    const streams = await captureStreams(async (stdout) => {
+      await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir], () =>
+        main({ stdout }),
+      );
+    });
+
+    assert.match(streams.err, /\[translation\] \[dry-run\] Translating 1 key\(s\) → fr/);
+    assert.match(streams.err, /1 chunk\(s\) over 1 locale group\(s\) = 0 \(dry-run\) request\(s\)/);
+  });
+
+  test('--validate prints each mismatch on stdout and exits 1', async () => {
+    const dir = path.join(tmpDir, 'validate-mismatch');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'fr.json'), JSON.stringify({ a: 'x', stale: 'y' }), 'utf-8');
+    const realExitCode = process.exitCode;
+
+    try {
+      const streams = await captureStreams(async (stdout) => {
+        await withArgv(
+          [
+            '{"a":"x","b":"z"}',
+            '--from',
+            'en',
+            '--to',
+            'fr',
+            '--validate',
+            '--output',
+            path.join(dir, '{locale}.json'),
+            '--config',
+            tmpDir,
+          ],
+          () => main({ stdout }),
+        );
+      });
+
+      assert.equal(process.exitCode, 1);
+      assert.equal(streams.out, ' [fr]\n   ✗ missing: b\n   ✗ extra: stale\n Summary: 1 missing, 1 extra, 1 ok\n');
+      assert.doesNotMatch(streams.err, /missing|Summary/);
+    } finally {
+      process.exitCode = realExitCode;
+    }
+  });
+
+  test('--diff without a hash sidecar warns that "changed" cannot be reported', async () => {
+    const dir = path.join(tmpDir, 'diff-no-baseline');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'fr.json'), JSON.stringify({ a: 'x' }), 'utf-8');
+
+    const streams = await captureStreams(async (stdout) => {
+      await withArgv(
+        [
+          '{"a":"x","b":"z"}',
+          '--from',
+          'en',
+          '--to',
+          'fr',
+          '--diff',
+          '--output',
+          path.join(dir, '{locale}.json'),
+          '--config',
+          tmpDir,
+        ],
+        () => main({ stdout }),
+      );
+    });
+
+    assert.match(streams.err, /No hash sidecar found/);
+    assert.doesNotMatch(streams.err, /Summary/);
+    assert.match(streams.out, / {2}\+ b/);
+    assert.match(streams.out, /Summary: 1 added, 0 removed, 0 changed, 1 unchanged/);
+  });
+});
+
+describe('the CLI printers', () => {
+  test('the header is tinted on a TTY and plain with NO_COLOR', async () => {
+    const run = async (opts: { tty: boolean; noColor: boolean }): Promise<string> => {
+      const streams = await captureStreams(async (stdout) => {
+        const saved = { color: process.env.NO_COLOR, tty: process.stderr.isTTY };
+        if (opts.noColor) process.env.NO_COLOR = '1';
+        else delete process.env.NO_COLOR;
+        process.stderr.isTTY = opts.tty;
+        try {
+          await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir], () =>
+            main({ stdout }),
+          );
+        } finally {
+          if (saved.color === undefined) delete process.env.NO_COLOR;
+          else process.env.NO_COLOR = saved.color;
+          process.stderr.isTTY = saved.tty;
+        }
+      });
+      return streams.err;
+    };
+
+    assert.ok((await run({ tty: true, noColor: false })).includes('\u001b['));
+    assert.ok(!(await run({ tty: true, noColor: true })).includes('\u001b['));
+  });
+});
+
+describe('main — a run that fails after some work', () => {
+  test("still prints the end-of-run summary from the error's result", async () => {
+    const realFetch = globalThis.fetch;
+    const realKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'test-key';
+    globalThis.fetch = (async () => new Response('denied', { status: 401 })) as typeof fetch;
+    let failure: unknown;
+    let streams: Streams | undefined;
+    try {
+      streams = await captureStreams(async (stdout) => {
+        await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--config', tmpDir], () => main({ stdout })).catch(
+          (err) => {
+            failure = err;
+          },
+        );
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+      if (realKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = realKey;
+    }
+
+    assert.ok(failure instanceof LoquiError && failure.code === 'AUTH', String(failure));
+    const warning = failure.result?.stats.warnings[0];
+    assert.ok(warning, 'the failed run should carry the warning its chunk raised');
+    const printed = streams?.err.split(warning).length ?? 0;
+    assert.equal(printed - 1, 2, 'the warning prints live and again in the summary');
   });
 });

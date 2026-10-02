@@ -25,7 +25,7 @@ echo "==> Syncing i18n translations"
 npx @mihairo/loqui \
   --input src/assets/i18n/en.json \
   --from en \
-  --to fr,de,es,ja,pt \
+  --to es,pt,de,ja \
   --output "src/assets/i18n/{locale}.json" \
   --incremental
 

@@ -15,8 +15,10 @@ import {
   type TranslationChunk,
   type TranslationResult,
 } from './types.js';
+import type { LogFn } from './utils/logger.js';
 
 const config: LoquiConfig = { ...CONFIG_DEFAULTS };
+const silent: LogFn = () => {};
 
 let tmpDir: string;
 let tmpCounter = 0;
@@ -50,7 +52,7 @@ after(async () => {
 });
 
 describe('translate — basic functionality', () => {
-  test('returns a locale map with correct keys and valid JSON', async () => {
+  test('returns one document per locale with the translated keys', async () => {
     const result = await translate({
       input: '{"greeting":"hello","farewell":"goodbye"}',
       from: 'en',
@@ -58,14 +60,9 @@ describe('translate — basic functionality', () => {
       engine: makeEngine(),
     });
 
-    assert.ok(result.fr);
-    assert.ok(result.de);
-
-    const fr = JSON.parse(result.fr);
+    const { fr, de } = result.locales;
     assert.equal(fr.greeting, 'HELLO');
     assert.equal(fr.farewell, 'GOODBYE');
-
-    const de = JSON.parse(result.de);
     assert.equal(de.greeting, 'HELLO');
   });
 
@@ -145,6 +142,7 @@ describe('translate — dry-run mode', () => {
 describe('translate — force mode', () => {
   test('re-translates all keys regardless of existing translations', async () => {
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'hello' },
       from: 'en',
       to: ['fr'],
@@ -228,7 +226,7 @@ describe('translate — glossary', () => {
       config: { ...CONFIG_DEFAULTS },
       engine: makeEngine(),
     });
-    const es = JSON.parse(result.es);
+    const es = result.locales.es;
     assert.ok('glossary' in es, 'glossary key must not be stripped when feature is disabled');
   });
 
@@ -248,7 +246,7 @@ describe('translate — glossary', () => {
       engine: makeEngine(),
     });
 
-    const es = JSON.parse(result.es);
+    const es = result.locales.es;
     assert.ok('greeting' in es, 'greeting key must be present');
     assert.ok(!('glossary' in es), 'glossary key must be stripped from output');
   });
@@ -263,8 +261,8 @@ describe('translate — glossary', () => {
       engine: makeEngine(),
     });
 
-    const es = JSON.parse(result.es);
-    assert.ok(es.title?.includes('Loqui'), 'Loqui must survive translation verbatim');
+    const es = result.locales.es;
+    assert.ok(String(es.title).includes('Loqui'), 'Loqui must survive translation verbatim');
   });
 
   test('rejects invalid inline glossary config before translating', async () => {
@@ -312,6 +310,7 @@ describe('translate — incremental mode', () => {
     const hashStore = { greeting: hashValue('Hello') };
 
     await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -342,6 +341,7 @@ describe('translate — incremental mode', () => {
     };
 
     await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -479,19 +479,13 @@ describe("translate — a target file holds exactly the source's keys", () => {
     };
   }
 
-  async function stderrOf(fn: () => Promise<unknown>): Promise<string> {
-    let text = '';
-    const real = process.stderr.write;
-    process.stderr.write = ((chunk: string) => {
-      text += String(chunk);
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      await fn();
-    } finally {
-      process.stderr.write = real;
-    }
-    return text;
+  /** What a run says through its logger, one message per line. */
+  async function logOf(run: (logger: LogFn) => Promise<unknown>): Promise<string> {
+    const lines: string[] = [];
+    await run((_level, message) => {
+      lines.push(message);
+    });
+    return lines.join('\n');
   }
 
   const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -520,8 +514,15 @@ describe("translate — a target file holds exactly the source's keys", () => {
   test('a key the source never had is removed, and the locale is told how many', async () => {
     const { dir, input, fr } = project({ a: 'Hello' }, { a: 'Bonjour', stale: 'x', old: { deep: 'y' } });
 
-    const err = await stderrOf(() =>
-      translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine: makeEngine() }),
+    const err = await logOf((logger) =>
+      translate({
+        input,
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        engine: makeEngine(),
+        logger,
+      }),
     );
 
     assert.deepEqual(read(fr), { a: 'Bonjour' });
@@ -534,7 +535,7 @@ describe("translate — a target file holds exactly the source's keys", () => {
     const { dir, input, fr } = project({ a: 'Hello' }, { a: 'Bonjour', stale: 'x' });
     const before = fs.readFileSync(fr, 'utf-8');
 
-    const err = await stderrOf(() =>
+    const err = await logOf((logger) =>
       translate({
         input,
         from: 'en',
@@ -542,6 +543,7 @@ describe("translate — a target file holds exactly the source's keys", () => {
         output: path.join(dir, '{locale}.json'),
         dryRun: true,
         engine: makeEngine(),
+        logger,
       }),
     );
 
@@ -727,23 +729,13 @@ describe('translate — a corrupt file is an error, not an empty file', () => {
     assert.equal(calls(), 0);
   });
 
-  test('a corrupt hash sidecar fails --diff, which reads it', async () => {
-    const { dir, input } = project();
-    fs.writeFileSync(path.join(dir, '.en.loqui-hash.json'), CONFLICT, 'utf-8');
-
-    await assert.rejects(
-      translate({ input, from: 'en', to: ['fr'], diff: true }),
-      (err: unknown) => err instanceof LoquiError && err.code === 'PARSE_ERROR',
-    );
-  });
-
   test('a corrupt hash sidecar the run does not use cannot fail it', async () => {
     const { dir, input } = project();
     fs.writeFileSync(path.join(dir, '.en.loqui-hash.json'), CONFLICT, 'utf-8');
 
     const result = await translate({ input, from: 'en', to: ['fr'], engine: makeEngine() });
 
-    assert.equal(JSON.parse(result.fr).greeting, 'HELLO');
+    assert.equal(result.locales.fr.greeting, 'HELLO');
   });
 });
 
@@ -806,12 +798,12 @@ describe('translate — a partial run keeps what it paid for', () => {
       assert.fail('translate() should have rejected');
     }
 
-    test('hands the partial result back on the error', async () => {
+    test('hands the result back on the error', async () => {
       const err = await rejection(flakyEngine(['boom']));
 
       assert.equal(err.code, 'CHUNK_FAILED');
-      assert.ok(err.partial?.fr, 'the paid-for chunk must be reachable when nothing is written');
-      assert.equal(JSON.parse(err.partial.fr).keep, KEEP.toUpperCase());
+      assert.ok(err.result?.locales.fr, 'the paid-for chunk must be reachable when nothing is written');
+      assert.equal(err.result.locales.fr.keep, KEEP.toUpperCase());
     });
 
     test('keeps the aggregate as the cause', async () => {
@@ -827,7 +819,7 @@ describe('translate — a partial run keeps what it paid for', () => {
       assert.match(err.message, /nothing was saved/i);
     });
 
-    test('carries no partial when nothing landed, and keeps the engine error as it was', async () => {
+    test('carries a result with nothing in it when nothing landed, and keeps the engine error as it was', async () => {
       const err = await rejection({
         async translateChunk() {
           throw new LoquiError('AUTH', 'OpenAI API error 401: invalid key');
@@ -836,7 +828,9 @@ describe('translate — a partial run keeps what it paid for', () => {
 
       assert.equal(err.code, 'AUTH');
       assert.equal(err.message, 'OpenAI API error 401: invalid key');
-      assert.equal(err.partial, undefined);
+      assert.equal(err.result?.stats.keysTranslated, 0);
+      assert.deepEqual(err.result?.written, {});
+      assert.equal('partial' in err, false);
     });
   });
 
@@ -876,10 +870,32 @@ describe('translate — a partial run keeps what it paid for', () => {
         assert.equal(err.code, 'AUTH');
         assert.equal(err.message, authError.message);
         assert.equal(err.cause, authError, 'the original error stays reachable');
-        assert.ok(err.partial?.fr);
-        assert.deepEqual(JSON.parse(err.partial.fr), { served: 'Bonjour' });
+        assert.ok(err.result?.locales.fr);
+        assert.deepEqual(err.result.locales.fr, { served: 'Bonjour' });
       });
     }
+  });
+
+  test('a translation-memory entry in the old key format is warned about through the logger', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const tmFile = path.join(dir, 'tm.json');
+    fs.writeFileSync(tmFile, JSON.stringify({ '811c9dc5': { fr: 'old' } }), 'utf-8');
+    const warnings: string[] = [];
+
+    await translate({
+      input: JSON.stringify({ a: 'Hello' }),
+      from: 'en',
+      to: ['fr'],
+      translationMemoryFile: tmFile,
+      engine: makeEngine(),
+      logger: (level, message) => {
+        if (level === 'warn') warnings.push(message);
+      },
+    });
+
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes(tmFile), warnings[0]);
   });
 
   test('says the output was written when there is an output path', async () => {
@@ -954,27 +970,50 @@ describe('translate — a partial run keeps what it paid for', () => {
   });
 });
 
-describe('translate — diff mode', () => {
-  test('a correctly translated key is not reported as changed', async () => {
-    const dir = nextTmp();
-    fs.mkdirSync(dir, { recursive: true });
-    const input = path.join(dir, 'en.json');
-    fs.writeFileSync(input, JSON.stringify({ greeting: 'Hello' }), 'utf-8');
-    fs.writeFileSync(path.join(dir, 'fr.json'), JSON.stringify({ greeting: 'Bonjour' }), 'utf-8');
-    const hashFile = path.join(dir, 'hashes.json');
-    fs.writeFileSync(hashFile, JSON.stringify({ greeting: hashValue('Hello') }), 'utf-8');
+describe('translate — the removed diff and validate modes', () => {
+  for (const [flag, replacement] of [
+    ['diff', 'diff()'],
+    ['validate', 'validate()'],
+  ] as const) {
+    for (const value of [true, false]) {
+      test(`${flag}: ${value} is rejected naming ${replacement}, before any file or engine is touched`, async () => {
+        let engineCalls = 0;
+        const engine: EngineAdapter = {
+          async translateChunk() {
+            engineCalls++;
+            return {};
+          },
+        };
 
-    // diff writes its report to stderr and returns an empty map
+        await assert.rejects(
+          // a v2 JavaScript caller: the file does not exist, so reading it first would fail differently
+          translate({
+            input: path.join(tmpDir, 'does-not-exist.json'),
+            from: 'en',
+            to: ['es'],
+            engine,
+            [flag]: value,
+          } as never),
+          (err: unknown) =>
+            err instanceof LoquiError && err.code === 'INVALID_CONFIG' && err.message.includes(replacement),
+        );
+
+        assert.equal(engineCalls, 0);
+      });
+    }
+  }
+
+  test('an undefined flag is not a flag', async () => {
     const result = await translate({
-      input,
+      input: '{"a":"Hello"}',
       from: 'en',
-      to: ['fr'],
-      output: path.join(dir, '{locale}.json'),
-      hashFile,
-      diff: true,
-    });
+      to: ['es'],
+      engine: makeEngine(),
+      diff: undefined,
+      validate: undefined,
+    } as never);
 
-    assert.deepEqual(result, {});
+    assert.equal(result.locales.es.a, 'HELLO');
   });
 });
 
@@ -1026,5 +1065,190 @@ describe('translate — a run that fails outright', () => {
 
     assert.ok(!fs.existsSync(path.join(dir, 'fr.json')), 'a locale file of only non-string values is not output');
     assert.ok(!fs.existsSync(hashFile), 'a run that did nothing must not rewrite the sidecar');
+  });
+});
+
+describe('translate — the typed result', () => {
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf-8'));
+
+  test('resolves with documents as objects and written naming exactly the files that now exist', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify({ a: 'Hello', n: { b: 'World' } }), 'utf-8');
+
+    const result = await translate({
+      input,
+      from: 'en',
+      to: ['es', 'pt'],
+      output: path.join(dir, '{locale}.json'),
+      engine: makeEngine(),
+    });
+
+    assert.deepEqual(result.locales.es, { a: 'HELLO', n: { b: 'WORLD' } });
+    assert.deepEqual(result.written, { es: path.join(dir, 'es.json'), pt: path.join(dir, 'pt.json') });
+    for (const file of Object.values(result.written)) assert.ok(fs.existsSync(file));
+    assert.deepEqual(read(result.written.es), result.locales.es);
+    assert.equal(result.stats.keysTranslated, 4);
+    assert.deepEqual(result.removed, { es: [], pt: [] });
+  });
+
+  test('written is empty on a dry run and when there is no output path', async () => {
+    const dir = nextTmp();
+
+    const dry = await translate({
+      input: '{"a":"Hello"}',
+      from: 'en',
+      to: ['es'],
+      output: path.join(dir, '{locale}.json'),
+      dryRun: true,
+      engine: makeEngine(),
+    });
+    const bare = await translate({ input: '{"a":"Hello"}', from: 'en', to: ['es'], engine: makeEngine() });
+
+    assert.deepEqual(dry.written, {});
+    assert.deepEqual(bare.written, {});
+    assert.equal(fs.existsSync(dir), false);
+  });
+
+  test('removed names the keys pruned from an existing target', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'es.json'), JSON.stringify({ a: 'Hola', stale: 'x' }), 'utf-8');
+
+    const result = await translate({
+      input: '{"a":"Hello"}',
+      from: 'en',
+      to: ['es'],
+      output: path.join(dir, '{locale}.json'),
+      engine: makeEngine(),
+    });
+
+    assert.deepEqual(result.removed, { es: ['stale'] });
+    assert.deepEqual(read(path.join(dir, 'es.json')), { a: 'Hola' });
+  });
+
+  test('an inline glossary key is not translated or written', async () => {
+    const seen: string[] = [];
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        seen.push(...Object.keys(chunk.keys));
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            { keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v])) },
+          ]),
+        );
+      },
+    };
+
+    const result = await translate({
+      input: JSON.stringify({ title: 'Open the Dashboard', glossary: { Dashboard: { es: 'Tablero' } } }),
+      from: 'en',
+      to: ['es'],
+      config: { glossary: {} },
+      engine,
+    });
+
+    assert.deepEqual(seen, ['title']);
+    assert.equal('glossary' in result.locales.es, false);
+  });
+});
+
+describe('translate — a failed run reports what was written', () => {
+  const KEEP = 'kept '.repeat(400);
+  const BOOM = 'lost '.repeat(400);
+
+  function flaky(): EngineAdapter {
+    const inner = makeEngine();
+    return {
+      async translateChunk(chunk, ...rest) {
+        if ('boom' in chunk.keys) throw new Error('API exploded');
+        return inner.translateChunk(chunk, ...rest);
+      },
+    };
+  }
+
+  async function rejection(promise: Promise<unknown>): Promise<LoquiError> {
+    try {
+      await promise;
+    } catch (err) {
+      if (err instanceof LoquiError) return err;
+      throw err;
+    }
+    assert.fail('translate() should have rejected');
+  }
+
+  test('result.written matches the files on disk, and there is no partial', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+
+    const err = await rejection(
+      translate({
+        input: JSON.stringify({ keep: KEEP, boom: BOOM }),
+        from: 'en',
+        to: ['es', 'pt'],
+        output: path.join(dir, '{locale}.json'),
+        config: { splitToken: 500 },
+        engine: flaky(),
+      }),
+    );
+
+    assert.ok(err.result?.written);
+    assert.deepEqual(Object.values(err.result.written).sort(), [path.join(dir, 'es.json'), path.join(dir, 'pt.json')]);
+    assert.deepEqual(
+      fs.readdirSync(dir).sort(),
+      Object.values(err.result.written)
+        .map((file) => path.basename(file))
+        .sort(),
+    );
+    assert.equal(err.result.locales.es.keep, KEEP.toUpperCase());
+    assert.equal('partial' in err, false);
+    assert.match(err.message, /written to disk/);
+  });
+
+  test('result.written is empty when nothing landed, and nothing is on disk', async () => {
+    const dir = nextTmp();
+
+    const err = await rejection(
+      translate({
+        input: '{"a":"Hello"}',
+        from: 'en',
+        to: ['es'],
+        output: path.join(dir, '{locale}.json'),
+        engine: {
+          async translateChunk() {
+            throw new LoquiError('AUTH', 'OpenAI API error 401: invalid key');
+          },
+        },
+      }),
+    );
+
+    assert.equal(err.code, 'AUTH');
+    assert.deepEqual(err.result?.written, {});
+    assert.equal(fs.existsSync(dir), false);
+  });
+
+  test('without an output path the message points at error.result', async () => {
+    const err = await rejection(
+      translate({
+        input: JSON.stringify({ keep: KEEP, boom: BOOM }),
+        from: 'en',
+        to: ['es'],
+        config: { splitToken: 500 },
+        engine: flaky(),
+      }),
+    );
+
+    assert.deepEqual(err.result?.written, {});
+    assert.match(err.message, /nothing was saved/i);
+    assert.match(err.message, /error\.result/);
+  });
+
+  test('an error that stops the run before anything is sent has no result', async () => {
+    const err = await rejection(translate({ input: '{not json', from: 'en', to: ['es'], engine: makeEngine() }));
+
+    assert.equal(err.code, 'PARSE_ERROR');
+    assert.equal(err.result, undefined);
   });
 });

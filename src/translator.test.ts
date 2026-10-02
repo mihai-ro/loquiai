@@ -11,8 +11,10 @@ import {
   type TranslationChunk,
   type TranslationResult,
 } from './types.js';
+import type { LogFn } from './utils/logger.js';
 
 const config: LoquiConfig = { ...CONFIG_DEFAULTS };
+const silent: LogFn = () => {};
 
 /** Engine that uppercases every value — deterministic, no network calls. */
 function makeEngine(transform: (v: string) => string = (v) => v.toUpperCase()): EngineAdapter {
@@ -53,6 +55,7 @@ describe('translateJson — placeholder validation', () => {
     const existing = { fr: { desc: 'existing translation' } };
 
     const { translations, stats } = await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -73,6 +76,7 @@ describe('translateJson — placeholder validation', () => {
     const source = { desc: 'Hello ${name}' };
 
     const { translations, stats } = await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -91,6 +95,7 @@ describe('translateJson — hash generation', () => {
   test('hash file is populated after first translation', async () => {
     const source = { greeting: 'Hello', bye: 'Goodbye' };
     const { updatedHashStore } = await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -108,6 +113,7 @@ describe('translateJson — hash generation', () => {
     const existing = { fr: { greeting: 'Bonjour' } }; // already translated, no hash stored yet
 
     const { updatedHashStore } = await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -126,6 +132,7 @@ describe('translateJson — hash generation', () => {
     const existing = { fr: { greeting: 'Bonjour' } };
 
     const { updatedHashStore } = await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -145,6 +152,7 @@ describe('translateJson — hash generation', () => {
     const hashStore = { greeting: hashValue('Hello') }; // hash from previous value
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -179,6 +187,7 @@ describe('translateJson — hash generation', () => {
     const hashStore = { greeting: hashValue('Hello') }; // hash matches current source
 
     await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -198,6 +207,7 @@ describe('translateJson — hash generation', () => {
 
     // First run — bootstraps hashes
     const run1 = await translateJson({
+      logger: silent,
       sourceFlat: sourceV1,
       from: 'en',
       to: ['fr'],
@@ -208,6 +218,7 @@ describe('translateJson — hash generation', () => {
 
     // Second run — source changed, re-translates and updates hash
     const run2 = await translateJson({
+      logger: silent,
       sourceFlat: sourceV2,
       from: 'en',
       to: ['fr'],
@@ -248,6 +259,7 @@ describe('translateJson — chunk failure handling', () => {
     };
 
     const { stats } = await translateJson({
+      logger: silent,
       sourceFlat: { hello: 'world' },
       from: 'en',
       to: ['fr'],
@@ -264,6 +276,7 @@ describe('translateJson — chunk failure handling', () => {
     // splitToken of 1 forces one key per chunk, so one can fail alone
     const sourceFlat = { keep: 'kept', boom: 'lost' };
     const { translations, stats } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -280,6 +293,7 @@ describe('translateJson — chunk failure handling', () => {
   test('records hashes only for keys that reached every locale', async () => {
     const sourceFlat = { keep: 'kept', boom: 'lost' };
     const { updatedHashStore } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -303,6 +317,7 @@ describe('translateJson — chunk failure handling', () => {
     };
 
     const { updatedHashStore } = await translateJson({
+      logger: silent,
       sourceFlat: { hello: 'world' },
       from: 'en',
       to: ['fr', 'de'],
@@ -343,6 +358,7 @@ describe('translateJson — a changed key that did not land', () => {
 
   function runWithFailingChunk(sent: string[] = []) {
     return translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -373,6 +389,7 @@ describe('translateJson — a changed key that did not land', () => {
 
     const sent: string[] = [];
     await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -405,6 +422,7 @@ describe('translateJson — a changed key that did not land', () => {
     const source = { changed: 'Hello ${name}' };
 
     const { updatedHashStore, updatedTranslationMemory, translations } = await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr', 'de'],
@@ -428,6 +446,7 @@ describe('translateJson — a changed key that did not land', () => {
 
     test('records the new hash and both locales once the engine delivers the other one', async () => {
       const { updatedHashStore, updatedTranslationMemory, translations } = await translateJson({
+        logger: silent,
         sourceFlat: { changed: newSource },
         from: 'en',
         to: ['fr', 'de'],
@@ -446,6 +465,7 @@ describe('translateJson — a changed key that did not land', () => {
 
     test('keeps the old hash and the memory entry as it was when the engine fails for the other one', async () => {
       const { updatedHashStore, updatedTranslationMemory, translations } = await translateJson({
+        logger: silent,
         sourceFlat: { changed: newSource, fresh: 'Fresh' },
         from: 'en',
         to: ['fr', 'de'],
@@ -486,6 +506,7 @@ describe('translateJson — a malformed ICU value', () => {
     const sent: string[] = [];
 
     const { translations, stats, failure } = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Hello', bought: UNBALANCED, farewell: 'Goodbye' },
       from: 'en',
       to: ['fr'],
@@ -508,6 +529,7 @@ describe('translateJson — a malformed ICU value', () => {
 
   test('is not recorded as done, so the next run reports it again', async () => {
     const { updatedHashStore } = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Hello', bought: UNBALANCED },
       from: 'en',
       to: ['fr'],
@@ -524,6 +546,7 @@ describe('translateJson — a malformed ICU value', () => {
     const sent: string[] = [];
 
     const { stats } = await translateJson({
+      logger: silent,
       sourceFlat: { bought: UNBALANCED },
       from: 'en',
       to: ['fr'],
@@ -539,6 +562,7 @@ describe('translateJson — a malformed ICU value', () => {
 
   test('an invalid placeholder pattern still fails the run', async () => {
     const { failure, stats } = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Hello' },
       from: 'en',
       to: ['fr'],
@@ -575,6 +599,7 @@ describe('translateJson — empty source values', () => {
     const sent: string[] = [];
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr', 'de'],
@@ -591,6 +616,7 @@ describe('translateJson — empty source values', () => {
 
   test('are not counted as translated, and a whitespace-only value is copied as it is', async () => {
     const { translations, stats } = await translateJson({
+      logger: silent,
       sourceFlat: { gap: '  ', title: 'Hi' },
       from: 'en',
       to: ['fr'],
@@ -605,6 +631,7 @@ describe('translateJson — empty source values', () => {
 
   test('are recorded as done, so the next run over the output makes no request', async () => {
     const first = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -616,6 +643,7 @@ describe('translateJson — empty source values', () => {
 
     const sent: string[] = [];
     const second = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -634,6 +662,7 @@ describe('translateJson — empty source values', () => {
     const sent: string[] = [];
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -650,6 +679,7 @@ describe('translateJson — empty source values', () => {
 
   test('leave a value already in the target alone while the source is unchanged', async () => {
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -680,6 +710,7 @@ describe('translateJson — fail fast on a bad key', () => {
     };
 
     const { failure } = await translateJson({
+      logger: silent,
       sourceFlat: fifty,
       from: 'en',
       to: ['fr'],
@@ -703,6 +734,7 @@ describe('translateJson — fail fast on a bad key', () => {
     };
 
     const { stats } = await translateJson({
+      logger: silent,
       sourceFlat: fifty,
       from: 'en',
       to: ['fr'],
@@ -728,6 +760,7 @@ describe('translateJson — fail fast on a bad key', () => {
     };
 
     const { failure, translations } = await translateJson({
+      logger: silent,
       sourceFlat: fifty,
       from: 'en',
       to: ['fr'],
@@ -767,6 +800,7 @@ describe('translateJson — a truncated chunk is split', () => {
     const calls: string[][] = [];
 
     const { translations, failure } = await translateJson({
+      logger: silent,
       sourceFlat: four,
       from: 'en',
       to: ['fr'],
@@ -788,6 +822,7 @@ describe('translateJson — a truncated chunk is split', () => {
     const calls: string[][] = [];
 
     const { translations, failure } = await translateJson({
+      logger: silent,
       sourceFlat: four,
       from: 'en',
       to: ['fr'],
@@ -803,6 +838,7 @@ describe('translateJson — a truncated chunk is split', () => {
 
   test('a single key that is cut off fails with TRUNCATED', async () => {
     const { failure, translations } = await translateJson({
+      logger: silent,
       sourceFlat: { only: 'One value' },
       from: 'en',
       to: ['fr'],
@@ -828,6 +864,7 @@ describe('translateJson — a truncated chunk is split', () => {
     };
 
     const { translations, failure } = await translateJson({
+      logger: silent,
       sourceFlat: four,
       from: 'en',
       to: ['fr'],
@@ -852,6 +889,7 @@ describe('translateJson — a truncated chunk is split', () => {
     };
 
     const { stats } = await translateJson({
+      logger: silent,
       sourceFlat: four,
       from: 'en',
       to: ['fr'],
@@ -874,6 +912,7 @@ describe('translateJson — a truncated chunk is split', () => {
 
     test('is reported once per run, however many chunks split', async () => {
       const { stats } = await translateJson({
+        logger: silent,
         sourceFlat: wide,
         from: 'en',
         to: ['fr'],
@@ -888,6 +927,7 @@ describe('translateJson — a truncated chunk is split', () => {
 
     test('is not reported when nothing was cut off', async () => {
       const { stats } = await translateJson({
+        logger: silent,
         sourceFlat: four,
         from: 'en',
         to: ['fr'],
@@ -902,6 +942,7 @@ describe('translateJson — a truncated chunk is split', () => {
 
   test('a value skipped by ICU masking is warned about once, however often the chunk splits', async () => {
     const { stats } = await translateJson({
+      logger: silent,
       sourceFlat: { ...four, bad: '{n, plural, one {# item} other {# items' },
       from: 'en',
       to: ['fr'],
@@ -930,6 +971,7 @@ describe('translateJson — a truncated chunk is split', () => {
     };
 
     const { translations, failure } = await translateJson({
+      logger: silent,
       sourceFlat: four,
       from: 'en',
       to: ['fr'],
@@ -955,6 +997,7 @@ describe('translateJson — failure code collapsing', () => {
 
   test('a uniform non-retryable failure surfaces its own code, not CHUNK_FAILED', async () => {
     const { failure } = await translateJson({
+      logger: silent,
       sourceFlat: { hello: 'world' },
       from: 'en',
       to: ['fr'],
@@ -979,6 +1022,7 @@ describe('translateJson — failure code collapsing', () => {
     };
 
     const { failure } = await translateJson({
+      logger: silent,
       sourceFlat: { a: 'a'.repeat(3000), b: 'b'.repeat(3000) },
       from: 'en',
       to: ['fr'],
@@ -1006,6 +1050,7 @@ describe('translateJson — failure code collapsing', () => {
     };
 
     const { failure } = await translateJson({
+      logger: silent,
       sourceFlat: { a: 'a'.repeat(3000), b: 'b'.repeat(3000) },
       from: 'en',
       to: ['fr'],
@@ -1020,6 +1065,7 @@ describe('translateJson — failure code collapsing', () => {
 
   test('a non-LoquiError failure stays CHUNK_FAILED', async () => {
     const { failure } = await translateJson({
+      logger: silent,
       sourceFlat: { hello: 'world' },
       from: 'en',
       to: ['fr'],
@@ -1033,6 +1079,7 @@ describe('translateJson — failure code collapsing', () => {
 
   test('a successful run carries no failure', async () => {
     const { failure } = await translateJson({
+      logger: silent,
       sourceFlat: { hello: 'world' },
       from: 'en',
       to: ['fr'],
@@ -1066,6 +1113,7 @@ describe('translateJson — translation memory hit rate', () => {
     };
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr', 'de'],
@@ -1090,6 +1138,7 @@ describe('translateJson — translation memory hit rate', () => {
     };
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { alpha: 'Alpha' },
       from: 'en',
       to: ['fr', 'de'],
@@ -1110,6 +1159,7 @@ describe('translateJson — locale linting', () => {
     // Engine returns source unchanged — simulates model failure to translate
     const engine = makeEngine((v) => v);
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Hello' },
       from: 'en',
       to: ['fr'],
@@ -1128,6 +1178,7 @@ describe('translateJson — locale linting', () => {
     // from === to: translation being same as source is expected
     const engine = makeEngine((v) => v);
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Hello' },
       from: 'en',
       to: ['en'],
@@ -1145,6 +1196,7 @@ describe('translateJson — locale linting', () => {
     // Engine returns a string > 4× source length — hallucination simulation
     const engine = makeEngine((v) => v + 'x'.repeat(v.length * 5));
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { key: 'Hello' },
       from: 'en',
       to: ['de'],
@@ -1162,6 +1214,7 @@ describe('translateJson — locale linting', () => {
     // German is ~30% longer than English — well within 4× threshold
     const engine = makeEngine((v) => v + v.slice(0, Math.floor(v.length * 0.3)));
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { title: 'Schedule' },
       from: 'en',
       to: ['de'],
@@ -1178,6 +1231,7 @@ describe('translateJson — locale linting', () => {
   test('still saves translation even when untranslated warning fires', async () => {
     const engine = makeEngine((v) => v);
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { brand: 'Acme' },
       from: 'en',
       to: ['ja'],
@@ -1210,6 +1264,7 @@ describe('translateJson — review pass', () => {
     };
 
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Hello' },
       from: 'en',
       to: ['fr'],
@@ -1238,6 +1293,7 @@ describe('translateJson — review pass', () => {
     };
 
     await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Hello' },
       from: 'en',
       to: ['fr'],
@@ -1264,6 +1320,7 @@ describe('translateJson — review pass', () => {
     };
 
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { k: 'v' },
       from: 'en',
       to: ['fr'],
@@ -1279,6 +1336,7 @@ describe('translateJson — review pass', () => {
     // EngineAdapter with no reviewChunk — review silently skipped
     const engine = makeEngine((v) => `TRANSLATED_${v}`);
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { key: 'Hello' },
       from: 'en',
       to: ['fr'],
@@ -1309,6 +1367,7 @@ describe('translateJson — glossary enforcement', () => {
     };
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'Welcome to Loqui' },
       from: 'en',
       to: ['es'],
@@ -1338,6 +1397,7 @@ describe('translateJson — glossary enforcement', () => {
 
     const existing = { es: { title: 'existing value' } };
     const { translations, stats } = await translateJson({
+      logger: silent,
       sourceFlat: { title: 'Dashboard overview' },
       from: 'en',
       to: ['es'],
@@ -1368,6 +1428,7 @@ describe('translateJson — glossary enforcement', () => {
     };
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { title: 'Dashboard overview' },
       from: 'en',
       to: ['es'],
@@ -1412,6 +1473,7 @@ describe('translateJson — each key goes only to the locales that need it', () 
     const calls: Call[] = [];
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['ja', 'fr'],
@@ -1431,6 +1493,7 @@ describe('translateJson — each key goes only to the locales that need it', () 
     const calls: Call[] = [];
 
     await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['ja', 'fr'],
@@ -1451,6 +1514,7 @@ describe('translateJson — each key goes only to the locales that need it', () 
     const locales = ['l0', 'l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7', 'l8', 'l9'];
 
     await translateJson({
+      logger: silent,
       sourceFlat: wide,
       from: 'en',
       to: locales,
@@ -1484,6 +1548,7 @@ describe('translateJson — each key goes only to the locales that need it', () 
     };
 
     const { failure } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['ja', 'fr'],
@@ -1498,6 +1563,7 @@ describe('translateJson — each key goes only to the locales that need it', () 
 
   test('translation memory records what each locale was delivered, key by key', async () => {
     const { updatedTranslationMemory } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['ja', 'fr'],
@@ -1533,6 +1599,7 @@ describe('translateJson — what an engine hands back', () => {
 
   test('a key that was not sent is neither written nor remembered', async () => {
     const { translations, updatedTranslationMemory } = await translateJson({
+      logger: silent,
       sourceFlat: { a: 'A', b: 'B' },
       from: 'en',
       to: ['fr'],
@@ -1586,6 +1653,7 @@ describe('translateJson — translation memory does not confuse strings whose ha
     const sent: string[] = [];
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { x: first },
       from: 'en',
       to: ['fr'],
@@ -1603,6 +1671,7 @@ describe('translateJson — translation memory does not confuse strings whose ha
     const sent: string[] = [];
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { x: second },
       from: 'en',
       to: ['fr'],
@@ -1618,6 +1687,7 @@ describe('translateJson — translation memory does not confuse strings whose ha
 
   test('both strings are remembered separately after one run', async () => {
     const { updatedTranslationMemory } = await translateJson({
+      logger: silent,
       sourceFlat: { x: first, y: second },
       from: 'en',
       to: ['fr'],
@@ -1634,6 +1704,7 @@ describe('translateJson — translation memory does not confuse strings whose ha
 describe("translateJson — a target holds only the source's keys", () => {
   test('keys the source no longer has are left out of the working target', async () => {
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { a: 'A' },
       from: 'en',
       to: ['fr'],
@@ -1648,6 +1719,7 @@ describe("translateJson — a target holds only the source's keys", () => {
 
   test('a source key restructured from an object to a string is translated once', async () => {
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { a: 'x' },
       from: 'en',
       to: ['fr'],
@@ -1662,6 +1734,7 @@ describe("translateJson — a target holds only the source's keys", () => {
 
   test('a run with nothing to translate still returns the pruned target', async () => {
     const { translations, stats } = await translateJson({
+      logger: silent,
       sourceFlat: { a: 'A' },
       from: 'en',
       to: ['fr'],
@@ -1695,6 +1768,7 @@ describe('translateJson — a blank target means not translated yet', () => {
     const sent: string[] = [];
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat: { title: 'Hello' },
       from: 'en',
       to: ['fr'],
@@ -1712,6 +1786,7 @@ describe('translateJson — a blank target means not translated yet', () => {
     const sent: string[] = [];
 
     await translateJson({
+      logger: silent,
       sourceFlat: { blank: '' },
       from: 'en',
       to: ['fr'],
@@ -1726,6 +1801,7 @@ describe('translateJson — a blank target means not translated yet', () => {
 
   test('a blank target is not recorded as done until it has been translated', async () => {
     const { updatedHashStore } = await translateJson({
+      logger: silent,
       sourceFlat: { title: 'Hello' },
       from: 'en',
       to: ['fr'],
@@ -1768,6 +1844,7 @@ describe('translateJson — --force and translation memory', () => {
     const sent: string[] = [];
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -1785,6 +1862,7 @@ describe('translateJson — --force and translation memory', () => {
     const sent: string[] = [];
 
     const { translations, updatedTranslationMemory } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr'],
@@ -1810,6 +1888,7 @@ describe('translateJson — per-locale key isolation', () => {
 
   test('a translated key is not written to a locale that already had it', async () => {
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr', 'de'],
@@ -1831,6 +1910,7 @@ describe('translateJson — per-locale key isolation', () => {
     };
 
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr', 'de'],
@@ -1848,6 +1928,7 @@ describe('translateJson — per-locale key isolation', () => {
 
   test('--force re-translates every key for every locale', async () => {
     const { translations } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr', 'de'],
@@ -1864,6 +1945,7 @@ describe('translateJson — per-locale key isolation', () => {
 
   test('translation memory records only what this run translated', async () => {
     const { updatedTranslationMemory } = await translateJson({
+      logger: silent,
       sourceFlat,
       from: 'en',
       to: ['fr', 'de'],
@@ -1899,6 +1981,7 @@ describe('translateJson — rate-limit signal', () => {
     };
 
     await translateJson({
+      logger: silent,
       sourceFlat: { hello: 'world' },
       from: 'en',
       to: ['fr'],

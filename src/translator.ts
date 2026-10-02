@@ -14,7 +14,7 @@ import type {
   TranslationMemory,
 } from './types.js';
 import { isUntranslated } from './untranslated.js';
-import { logger } from './utils/logger.js';
+import type { LogFn } from './utils/logger.js';
 
 export interface TranslateJobOptions {
   sourceFlat: FlatTranslations;
@@ -29,6 +29,10 @@ export interface TranslateJobOptions {
   force?: boolean;
   dryRun?: boolean;
   engine?: EngineAdapter;
+  /** where the run's messages go. Required: a site that forgets it would log nowhere. */
+  logger: LogFn;
+  /** warnings raised while preparing the run (before any key is sent), logged first. */
+  preRunWarnings?: string[];
 }
 
 export interface TranslateJobResult {
@@ -37,10 +41,26 @@ export interface TranslateJobResult {
   updatedTranslationMemory: TranslationMemory;
   stats: RunStats;
   /**
+   * The run's log. A caller that has something to say after the run, such as the file
+   * layer's note about pruned keys, says it here so it lands in `stats.warnings` too.
+   */
+  log: LogFn;
+  /**
    * Set when chunks failed. The caller persists what succeeded and then raises this,
    * so a partial run still leaves its output on disk.
    */
   failure?: LoquiError;
+}
+
+/**
+ * The one writer of `stats.warnings`: a `warn` is recorded in the run's stats and every
+ * message goes to the caller's logger, so the two can never disagree.
+ */
+function createRunLog(stats: RunStats, logger: LogFn): LogFn {
+  return (level, message) => {
+    if (level === 'warn') stats.warnings.push(message);
+    logger(level, message);
+  };
 }
 
 export async function translateJson(opts: TranslateJobOptions): Promise<TranslateJobResult> {
@@ -56,6 +76,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     glossaryModel,
     force = false,
     dryRun = false,
+    preRunWarnings = [],
   } = opts;
 
   const stats: RunStats = {
@@ -65,6 +86,8 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     warnings: [],
     failedChunks: 0,
   };
+  const log = createRunLog(stats, opts.logger);
+  for (const w of preRunWarnings) log('warn', w);
   const startTime = Date.now();
 
   const translationMemory = tmOpt ?? {};
@@ -116,18 +139,20 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   }
 
   if (allKeysNeeded.size === 0) {
-    logger.info(`[${namespace}]${dryRun ? ' [dry-run]' : ''} Nothing to translate. All locales up to date.`);
+    log('info', `[${namespace}]${dryRun ? ' [dry-run]' : ''} Nothing to translate. All locales up to date.`);
     stats.elapsedMs = Date.now() - startTime;
     return {
       translations: workingTargets,
       updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
       updatedTranslationMemory: translationMemory,
       stats,
+      log,
     };
   }
 
   const activeLocales = Object.keys(keysToTranslatePerLocale);
-  logger.info(
+  log(
+    'info',
     `[${namespace}]${dryRun ? ' [dry-run]' : ''} Translating ${allKeysNeeded.size} key(s) → ${activeLocales.join(', ')}`,
   );
 
@@ -162,13 +187,14 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   }
 
   if (Object.keys(keysNeedingTranslation).length === 0) {
-    logger.info(`[${namespace}] All ${allKeysNeeded.size} key(s) served from translation memory.`);
+    log('info', `[${namespace}] All ${allKeysNeeded.size} key(s) served from translation memory.`);
     stats.elapsedMs = Date.now() - startTime;
     return {
       translations: workingTargets,
       updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
       updatedTranslationMemory: translationMemory,
       stats,
+      log,
     };
   }
 
@@ -185,7 +211,8 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   const chunks = [...groups.values()].flatMap(({ locales, keys }) =>
     chunkTranslations(keys, config.splitToken, locales.length).map((chunk) => ({ chunk, locales })),
   );
-  logger.dim(
+  log(
+    'debug',
     `[${namespace}] ${chunks.length} chunk(s) over ${groups.size} locale group(s) = ${dryRun ? '0 (dry-run)' : chunks.length} request(s)`,
   );
 
@@ -197,6 +224,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     // Note: onSuccess fires once per chunk (not per request). A 429 collapses the window
     // immediately via setRateLimitSignal; recovery ramps up one step per 10 completed chunks.
     engine.setRateLimitSignal?.(() => pool.onRateLimited());
+    engine.setLogger?.(log);
 
     // A cut-off response is billed in full and then sent again as two. One note per run,
     // not per chunk: the cost is the same fact however many chunks it happened to.
@@ -205,8 +233,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
       if (splitReported) return;
       splitReported = true;
       const w = `[${namespace}] Some responses were cut off at the engine's output limit and re-sent in halves. The cut-off ones were still billed; a lower splitToken avoids paying for them.`;
-      logger.warn(w);
-      stats.warnings.push(w);
+      log('warn', w);
     };
 
     const tasks = chunks.map(({ chunk, locales }, i) => async () => {
@@ -225,6 +252,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
           workingTargets,
           config,
           stats,
+          log,
           glossaryModel,
         });
       } catch (err) {
@@ -247,8 +275,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
       // only what landed, so the next run retries exactly the gap.
       for (const e of err.errors) {
         const msg = `[${namespace}] ${(e as Error).message}`;
-        logger.warn(msg);
-        stats.warnings.push(msg);
+        log('warn', msg);
       }
       stats.failedChunks = err.errors.length;
       failure = collapseChunkFailure(err, chunks.length, namespace);
@@ -286,6 +313,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     updatedHashStore,
     updatedTranslationMemory: translationMemory,
     stats,
+    log,
     failure,
   };
 }

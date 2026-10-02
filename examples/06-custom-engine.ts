@@ -32,14 +32,14 @@ const mockEngine: EngineAdapter = {
   },
 };
 
-const result = await translate({
+const { locales } = await translate({
   input: JSON.stringify({ greeting: 'Hello', farewell: 'Goodbye' }),
   from: 'en',
-  to: ['fr', 'de'],
+  to: ['es', 'de'],
   engine: mockEngine,
 });
 
-for (const [locale, json] of Object.entries(result)) {
+for (const [locale, doc] of Object.entries(locales)) {
   console.log(`\n--- ${locale} ---`);
-  console.log(json);
+  console.log(JSON.stringify(doc, null, 2));
 }

@@ -1,5 +1,5 @@
 import { LoquiError } from '../errors.js';
-import { logger } from '../utils/logger.js';
+import type { LogFn } from '../utils/logger.js';
 
 /**
  * Maximum locales × keys product before engines fall back from structured-output
@@ -84,6 +84,8 @@ export interface RetryOptions {
   fetchFn?: (url: string, init: RequestInit) => Promise<Response>;
   /** override sleep — use `() => Promise.resolve()` in tests for instant retries. */
   sleepFn?: (ms: number) => Promise<void>;
+  /** where retry notices go. Required: a call site that forgets it would retry unseen. */
+  log: LogFn;
 }
 
 /**
@@ -91,7 +93,7 @@ export interface RetryOptions {
  * A 2xx body that is not JSON is INVALID_RESPONSE: it is a proxy or gateway page, not
  * an answer, and a retry would fetch the same page.
  */
-export async function fetchWithRetry(url: string, init: RequestInit, options: RetryOptions = {}): Promise<unknown> {
+export async function fetchWithRetry(url: string, init: RequestInit, options: RetryOptions): Promise<unknown> {
   const {
     maxRetries = 5,
     parseRetryDelay = defaultRetryAfterHeader,
@@ -100,6 +102,7 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
     onRateLimited,
     fetchFn,
     sleepFn,
+    log,
   } = options;
 
   const fetchImpl = fetchFn ?? fetch;
@@ -130,7 +133,8 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
           { cause: err },
         );
       const waitMs = exponentialBackoff(attempt);
-      logger.dim(
+      log(
+        'debug',
         `[retry] ${engineName} network error — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})...`,
       );
       await sleepImpl(waitMs);
@@ -153,7 +157,8 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
 
       const serverDelay = response.status === 429 ? parseRetryDelay(response.headers, bodyText) : null;
       const waitMs = serverDelay ?? exponentialBackoff(attempt);
-      logger.dim(
+      log(
+        'debug',
         `[retry] ${engineName} ${response.status} — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})...`,
       );
       await sleepImpl(waitMs);

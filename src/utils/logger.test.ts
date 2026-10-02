@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, test } from 'node:test';
-import { logger } from './logger.js';
+import { type LogLevel, stderrLogger } from './logger.js';
 
 const ANSI_PREFIX = '\u001b[';
 
-const METHODS = ['info', 'warn', 'error', 'success', 'header', 'dim'] as const;
+const LEVELS: LogLevel[] = ['info', 'warn', 'debug'];
 
 interface Capture {
   out: string[];
@@ -46,15 +46,15 @@ afterEach(() => {
   else process.env.NO_COLOR = savedNoColor;
 });
 
-describe('logger stream routing', () => {
-  for (const method of METHODS) {
-    test(`${method} writes to stderr and never to stdout`, () => {
+describe('stderrLogger stream routing', () => {
+  for (const level of LEVELS) {
+    test(`${level} writes to stderr and never to stdout`, () => {
       delete process.env.NO_COLOR;
       const { out, err } = capture(() => {
-        logger[method]('hello');
+        stderrLogger(level, 'hello');
       });
 
-      assert.deepEqual(out, [], `logger.${method} polluted stdout`);
+      assert.deepEqual(out, [], `stderrLogger('${level}') polluted stdout`);
       assert.equal(err.length, 1);
       assert.match(err[0], /hello/);
       assert.match(err[0], /\n$/);
@@ -63,18 +63,18 @@ describe('logger stream routing', () => {
 
   test('stdout stays clean across a full run of diagnostics', () => {
     const { out } = capture(() => {
-      for (const method of METHODS) logger[method]('noise');
+      for (const level of LEVELS) stderrLogger(level, 'noise');
     });
     assert.equal(out.join(''), '');
   });
 });
 
-describe('logger colour gating', () => {
+describe('stderrLogger colour gating', () => {
   test('emits ANSI escapes when stderr is a TTY and NO_COLOR is unset', () => {
     delete process.env.NO_COLOR;
     const { err } = capture(
       () => {
-        logger.info('tinted');
+        stderrLogger('info', 'tinted');
       },
       { isTTY: true },
     );
@@ -85,7 +85,7 @@ describe('logger colour gating', () => {
     delete process.env.NO_COLOR;
     const { err } = capture(
       () => {
-        logger.info('plain');
+        stderrLogger('info', 'plain');
       },
       { isTTY: false },
     );
@@ -97,31 +97,21 @@ describe('logger colour gating', () => {
     process.env.NO_COLOR = '1';
     const { err } = capture(
       () => {
-        for (const method of METHODS) logger[method]('plain');
+        for (const level of LEVELS) stderrLogger(level, 'plain');
       },
       { isTTY: true },
     );
     for (const line of err) assert.ok(!line.includes(ANSI_PREFIX), `unexpected ANSI escapes: ${JSON.stringify(line)}`);
   });
 
-  test('error keeps its prefix in both colour modes', () => {
+  test('each level keeps its own prefix when plain', () => {
     process.env.NO_COLOR = '1';
-    const plain = capture(
+    const { err } = capture(
       () => {
-        logger.error('boom');
+        for (const level of LEVELS) stderrLogger(level, 'm');
       },
       { isTTY: true },
     );
-    assert.equal(plain.err[0], ' ❌ Error: boom\n');
-
-    delete process.env.NO_COLOR;
-    const tinted = capture(
-      () => {
-        logger.error('boom');
-      },
-      { isTTY: true },
-    );
-    assert.match(tinted.err[0], /❌ Error:/);
-    assert.match(tinted.err[0], /boom/);
+    assert.deepEqual(err, [' m\n', '[❗️] m\n', ' m\n']);
   });
 });

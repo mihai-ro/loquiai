@@ -6,7 +6,7 @@
  *
  * Available variables:
  *   {{sourceLocale}}   — e.g. "en"
- *   {{targetLocales}}  — e.g. "fr, de"
+ *   {{targetLocales}}  — e.g. "es, de"
  *   {{namespace}}      — e.g. "checkout"
  *   {{context}}        — value of config.context
  *   {{json}}           — the JSON chunk to translate (user prompt only)
@@ -20,7 +20,7 @@ import { translate } from '@mihairo/loqui';
 await translate({
   input: './en.json',
   from: 'en',
-  to: ['fr', 'de'],
+  to: ['es', 'de'],
   output: './i18n/{locale}.json',
   namespace: 'marketing',
   config: {

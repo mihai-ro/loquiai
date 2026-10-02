@@ -11,7 +11,7 @@ import type {
   TranslationChunk,
   TranslationResult,
 } from './types.js';
-import { logger } from './utils/logger.js';
+import type { LogFn } from './utils/logger.js';
 
 interface ProcessChunkOptions {
   chunk: TranslationChunk;
@@ -30,6 +30,8 @@ interface ProcessChunkOptions {
   workingTargets: Record<string, FlatTranslations>;
   config: LoquiConfig;
   stats: RunStats;
+  /** the run's log: a `warn` through it is also recorded in `stats.warnings`. */
+  log: LogFn;
   glossaryModel?: GlossaryModel;
 }
 
@@ -51,6 +53,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
     workingTargets,
     config,
     stats,
+    log,
     glossaryModel,
   } = opts;
 
@@ -58,11 +61,10 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
   const { maskedChunk, maskMaps, skipped } = maskChunk(chunk, config.placeholderPatterns, noTranslate);
   for (const [key, reason] of Object.entries(skipped)) {
     const w = `[${namespace}] Key "${key}" was not sent for translation: ${reason}`;
-    logger.warn(w);
-    stats.warnings.push(w);
+    log('warn', w);
   }
   if (Object.keys(maskedChunk.keys).length === 0) {
-    logger.dim(`[${namespace}] Chunk ${i + 1}/${total} had nothing left to send`);
+    log('debug', `[${namespace}] Chunk ${i + 1}/${total} had nothing left to send`);
     return;
   }
 
@@ -83,8 +85,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
 
         if (!value.trim()) {
           const w = `[${namespace}→${locale}] Empty translation for key: "${key}"`;
-          logger.warn(w);
-          stats.warnings.push(w);
+          log('warn', w);
           continue;
         }
 
@@ -93,8 +94,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         const missing = [...new Set(originalTokens)].filter((t) => !value.includes(t));
         if (missing.length > 0) {
           const w = `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${missing.join(', ')} — skipped, will retry on next run`;
-          logger.warn(w);
-          stats.warnings.push(w);
+          log('warn', w);
           continue;
         }
 
@@ -107,8 +107,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
           });
           if (missingTerms.length > 0) {
             const w = `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`;
-            logger.warn(w);
-            stats.warnings.push(w);
+            log('warn', w);
             continue;
           }
         }
@@ -119,16 +118,14 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         // returned the input unchanged. Warn but save — could be a proper noun.
         if (locale !== from && sourceValue.trim() !== '' && value.trim() === sourceValue.trim()) {
           const w = `[${namespace}→${locale}] Key "${key}" appears untranslated (identical to source)`;
-          logger.warn(w);
-          stats.warnings.push(w);
+          log('warn', w);
         }
 
         // Length explosion: ratio > 4× source is almost certainly a hallucination.
         if (sourceValue.length > 0 && value.length > sourceValue.length * MAX_EXPANSION_RATIO) {
           const ratio = Math.round(value.length / sourceValue.length);
           const w = `[${namespace}→${locale}] Key "${key}" translation is ${ratio}× source length — possible hallucination`;
-          logger.warn(w);
-          stats.warnings.push(w);
+          log('warn', w);
         }
 
         workingTargets[locale][key] = value;
@@ -156,7 +153,8 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
 
       onSplit();
       const middle = Math.ceil(keys.length / 2);
-      logger.dim(
+      log(
+        'debug',
         `[${namespace}] Chunk ${i + 1}/${total} was cut off at ${keys.length} key(s) — retrying as ${middle} + ${keys.length - middle}`,
       );
       // Both halves run even if the first fails: what the second delivers is paid for.
@@ -171,8 +169,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
       // Only the first is thrown, and the pool reports that one; the rest would vanish.
       for (const other of failures.slice(1)) {
         const w = `[${namespace}] Chunk ${i + 1}/${total} also failed: ${other instanceof Error ? other.message : String(other)}`;
-        logger.warn(w);
-        stats.warnings.push(w);
+        log('warn', w);
       }
       if (failures.length > 0) throw failures[0];
       return;
@@ -182,7 +179,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
 
   await translateKeys(Object.keys(maskedChunk.keys));
 
-  logger.dim(`[${namespace}] Chunk ${i + 1}/${total} done`);
+  log('debug', `[${namespace}] Chunk ${i + 1}/${total} done`);
 }
 
 function maskChunk(

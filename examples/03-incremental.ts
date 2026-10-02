@@ -17,7 +17,7 @@ import { translate } from '@mihairo/loqui';
 await translate({
   input: './en.json',
   from: 'en',
-  to: ['fr', 'de'],
+  to: ['es', 'de'],
   output: './i18n/{locale}.json',
   incremental: true,   // only re-translate what changed
 });

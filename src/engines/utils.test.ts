@@ -63,10 +63,46 @@ describe('truncate', () => {
 
 const noSleep = (): Promise<void> => Promise.resolve();
 
+/** fetchWithRetry with the required log defaulted to a no-op, for tests that are not about logging. */
+function withRetry(url: string, init: RequestInit, options: Omit<RetryOptions, 'log'> = {}): Promise<unknown> {
+  return fetchWithRetry(url, init, { log: () => {}, ...options });
+}
+
+describe('fetchWithRetry — logging', () => {
+  test('reports each retry through the given log at debug, and writes to no stream itself', async () => {
+    const messages: Array<[string, string]> = [];
+    let calls = 0;
+
+    await fetchWithRetry(
+      'http://test',
+      {},
+      {
+        engineName: 'Test',
+        maxRetries: 3,
+        sleepFn: noSleep,
+        log: (level, message) => {
+          messages.push([level, message]);
+        },
+        fetchFn: async () => {
+          calls++;
+          return calls < 3 ? mockResponse(503, 'unavailable') : mockResponse(200, '{}');
+        },
+      },
+    );
+
+    assert.equal(messages.length, 2);
+    assert.deepEqual(
+      messages.map(([level]) => level),
+      ['debug', 'debug'],
+    );
+    assert.match(messages[0][1], /^\[retry\] Test 503 — waiting .* \(attempt 1\/3\)/);
+  });
+});
+
 describe('fetchWithRetry — 5xx transient retry', () => {
   test('retries 503 and succeeds on second attempt', async () => {
     let calls = 0;
-    const result = await fetchWithRetry(
+    const result = await withRetry(
       'http://test',
       {},
       {
@@ -87,7 +123,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
     let calls = 0;
     await assert.rejects(
       () =>
-        fetchWithRetry(
+        withRetry(
           'http://test',
           {},
           {
@@ -112,7 +148,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
 
   test('retries 408 Request Timeout', async () => {
     let calls = 0;
-    const result = await fetchWithRetry(
+    const result = await withRetry(
       'http://test',
       {},
       {
@@ -131,7 +167,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
 
   test('retries 529 (provider overloaded)', async () => {
     let calls = 0;
-    const result = await fetchWithRetry(
+    const result = await withRetry(
       'http://test',
       {},
       {
@@ -152,7 +188,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
     let calls = 0;
     await assert.rejects(
       () =>
-        fetchWithRetry(
+        withRetry(
           'http://test',
           {},
           {
@@ -178,7 +214,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
     let calls = 0;
     await assert.rejects(
       () =>
-        fetchWithRetry(
+        withRetry(
           'http://test',
           {},
           {
@@ -202,7 +238,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
 
   test('retries on network error and succeeds', async () => {
     let calls = 0;
-    const result = await fetchWithRetry(
+    const result = await withRetry(
       'http://test',
       {},
       {
@@ -224,7 +260,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
     const cause = Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' });
     await assert.rejects(
       () =>
-        fetchWithRetry(
+        withRetry(
           'http://test',
           {},
           {
@@ -250,7 +286,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
   test('calls onRateLimited when 429 is encountered', async () => {
     let rateLimitSignals = 0;
     let calls = 0;
-    await fetchWithRetry(
+    await withRetry(
       'http://test',
       {},
       {
@@ -324,13 +360,13 @@ describe('fetchWithRetry — response body timeout', () => {
 
   test('times out when the body stalls after the headers arrive', async () => {
     await assert.rejects(
-      fetchWithRetry('https://example.invalid/v1', {}, { fetchFn: stallingBody(), timeoutMs: 50, maxRetries: 0 }),
+      withRetry('https://example.invalid/v1', {}, { fetchFn: stallingBody(), timeoutMs: 50, maxRetries: 0 }),
       (err: unknown) => err instanceof LoquiError && err.code === 'TIMEOUT',
     );
   });
 
   test('a normal body comes back parsed', async () => {
-    const body = await fetchWithRetry(
+    const body = await withRetry(
       'https://example.invalid/v1',
       {},
       { fetchFn: async () => new Response('{"ok":true}', { status: 200 }) },
@@ -341,7 +377,7 @@ describe('fetchWithRetry — response body timeout', () => {
 
   test('an empty 2xx body is an invalid response, not a result', async () => {
     await assert.rejects(
-      fetchWithRetry('https://example.invalid/v1', {}, { fetchFn: async () => new Response(null, { status: 204 }) }),
+      withRetry('https://example.invalid/v1', {}, { fetchFn: async () => new Response(null, { status: 204 }) }),
       (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_RESPONSE',
     );
   });
@@ -353,7 +389,7 @@ describe('fetchWithRetry — a 2xx body that is not JSON', () => {
   test('throws INVALID_RESPONSE with the body, without retrying', async () => {
     let calls = 0;
     await assert.rejects(
-      fetchWithRetry(
+      withRetry(
         'http://test',
         {},
         {
@@ -376,7 +412,7 @@ describe('fetchWithRetry — a 2xx body that is not JSON', () => {
 
   test('redacts secrets from the body it quotes', async () => {
     await assert.rejects(
-      fetchWithRetry(
+      withRetry(
         'http://test',
         {},
         { fetchFn: async () => mockResponse(200, 'echo sk-1234567890abcdefghij1234567890abcdef') },
@@ -388,10 +424,14 @@ describe('fetchWithRetry — a 2xx body that is not JSON', () => {
 
 describe('fetchWithRetry — how long a 429 waits', () => {
   /** Answers 429 once with `headers`/`body`, then succeeds; returns every sleep it was asked for. */
-  async function sleepsAfter429(headers: HeadersInit, body: string, options: RetryOptions = {}): Promise<number[]> {
+  async function sleepsAfter429(
+    headers: HeadersInit,
+    body: string,
+    options: Omit<RetryOptions, 'log'> = {},
+  ): Promise<number[]> {
     const sleeps: number[] = [];
     let calls = 0;
-    await fetchWithRetry(
+    await withRetry(
       'http://test',
       {},
       {

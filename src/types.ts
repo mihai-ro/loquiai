@@ -1,3 +1,5 @@
+import type { LogFn } from './utils/logger.js';
+
 export type SupportedEngine = 'gemini' | 'openai' | 'anthropic';
 
 export type GeminiModel =
@@ -23,7 +25,7 @@ export interface LoquiConfig {
   model: SupportedModel;
   /** Default source locale code (e.g. 'en'). Can be overridden per `translate()` call. */
   from?: string;
-  /** Default target locale codes (e.g. ['fr', 'de']). Can be overridden per `translate()` call. */
+  /** Default target locale codes (e.g. ['es', 'de']). Can be overridden per `translate()` call. */
   to?: string[];
   /** LLM sampling temperature. Lower values = more deterministic. Range: 0–2. Default: 0.1. */
   temperature: number;
@@ -131,6 +133,30 @@ export interface RunStats {
   failedChunks: number;
 }
 
+/** A parsed JSON document. */
+export type JsonObject = Record<string, unknown>;
+
+/** What a translation run produced, whether it came from memory or from files. */
+export interface TranslationRun {
+  /** One full document per target locale, keys sorted. */
+  locales: Record<string, JsonObject>;
+  stats: RunStats;
+  /** Keys pruned from each locale's existing document because the source no longer has them. */
+  removed: Record<string, string[]>;
+}
+
+/** The result of `translateObject()`: the run, plus the state a caller persists to make the next one incremental. */
+export interface ObjectRun extends TranslationRun {
+  hashes: HashStore;
+  memory: TranslationMemory;
+}
+
+/** The result of `translate()`: the run, plus where it was written. */
+export interface TranslateResult extends TranslationRun {
+  /** locale → path of each file written. Empty on a dry run or when no output was given. */
+  written: Record<string, string>;
+}
+
 /** Adapter interface for plugging in custom LLM engines. */
 export interface EngineAdapter {
   translateChunk(
@@ -155,4 +181,10 @@ export interface EngineAdapter {
    * can feed back into the concurrency window.
    */
   setRateLimitSignal?(fn: () => void): void;
+  /**
+   * optional hook for diagnostics. Called by `translateJson` with the run's log, so what
+   * the engine reports (a retry, a response it had to repair) reaches the run's logger
+   * and its `stats.warnings`. An engine without it stays silent.
+   */
+  setLogger?(log: LogFn): void;
 }

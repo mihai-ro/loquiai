@@ -1,3 +1,5 @@
+import type { HashStore, TranslationMemory, TranslationRun } from './types.js';
+
 export type LoquiErrorCode =
   | 'AUTH'
   | 'RATE_LIMIT'
@@ -10,20 +12,29 @@ export type LoquiErrorCode =
   | 'TRUNCATED'
   | 'INVALID_USAGE';
 
+/** What a run that failed in some of its chunks did get done. */
+export type FailedRunResult = TranslationRun & {
+  /** set by `translateObject()`, for a caller that persists partial progress. */
+  hashes?: HashStore;
+  memory?: TranslationMemory;
+  /** set by `translate()`: the files written before it gave up. */
+  written?: Record<string, string>;
+};
+
 export interface LoquiErrorOptions extends ErrorOptions {
-  /** What a failed run did translate: locale to serialized JSON, the shape `translate()` returns. */
-  partial?: Record<string, string>;
+  result?: FailedRunResult;
 }
 
 export class LoquiError extends Error {
   readonly code: LoquiErrorCode;
-  readonly partial?: Record<string, string>;
+  /** Present when chunks failed: everything that did land, and the run's stats. Absent when the run stopped before sending anything. */
+  readonly result?: FailedRunResult;
 
   constructor(code: LoquiErrorCode, message: string, options?: LoquiErrorOptions) {
     super(message, options);
     this.name = 'LoquiError';
     this.code = code;
-    this.partial = options?.partial;
+    this.result = options?.result;
     // Restore prototype chain for instanceof checks across compilation targets.
     Object.setPrototypeOf(this, new.target.prototype);
   }

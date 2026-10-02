@@ -59,7 +59,7 @@ const config: LoquiConfig = {
 await translate({
   input: './en.json',
   from: 'en',
-  to: ['fr', 'de'],
+  to: ['es', 'de'],
   engine: new MyCustomEngine(config),
   config,
 });

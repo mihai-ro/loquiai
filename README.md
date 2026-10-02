@@ -15,7 +15,7 @@
 </p>
 
 ```sh
-npx @mihairo/loqui --input en.json --from en --to fr,de,es --output ./i18n/{locale}.json
+npx @mihairo/loqui --input en.json --from en --to es,pt,de --output ./i18n/{locale}.json
 ```
 
 ---
@@ -82,7 +82,7 @@ All fields are optional. CLI flags always override the config file.
 | `engine`              | `gemini` \| `openai` \| `anthropic` | `gemini`           | LLM provider                         |
 | `model`               | string                              | `gemini-2.5-flash` | Model name (any string)              |
 | `from`                | string                              | —                  | Source locale (e.g. `en`)            |
-| `to`                  | string[]                            | —                  | Target locales (e.g. `["fr","de"]`)  |
+| `to`                  | string[]                            | —                  | Target locales (e.g. `["es","de"]`)  |
 | `temperature`         | 0–2                                 | `0.1`              | Sampling temperature                 |
 | `topP`                | 0–1                                 | `1`                | Nucleus sampling                     |
 | `concurrency`         | 1–32                                | `8`                | Parallel API requests                |
@@ -107,8 +107,8 @@ loqui [input] [options]
 [input] — one of:
   --input <file>         read from a JSON file
   --input '<json>'       pass a JSON string inline
-  first positional arg   loqui en.json --from en --to fr
-  stdin                  cat en.json | loqui --from en --to fr
+  first positional arg   loqui en.json --from en --to es
+  stdin                  cat en.json | loqui --from en --to es
 
 Options:
   --config <path>        Config file or directory (default: .loqui.json in cwd)
@@ -131,12 +131,12 @@ Options:
   --help, -h             Show help
 ```
 
-Options take either form: `--to fr,de` or `--to=fr,de`. An unknown option is an error,
+Options take either form: `--to es,de` or `--to=es,de`. An unknown option is an error,
 not a silent no-op — a typo like `--incremetal` exits non-zero rather than quietly
 re-translating the whole file at full price. A value flag with no value
 (`--output --incremental`) and an extra positional argument are errors too: in
-`loqui en.json --to fr de`, `de` would be dropped, so loqui exits `11` naming it
-instead. Pass several locales as `--to fr,de`.
+`loqui en.json --to es de`, `de` would be dropped, so loqui exits `11` naming it
+instead. Pass several locales as `--to es,de`.
 
 ### Exit codes
 
@@ -166,8 +166,8 @@ If some chunks fail and others succeed:
 - With `--output`, loqui **writes the successful output first** and then exits `8`.
 - Without it, nothing is printed — stdout is either complete, valid JSON or empty — and
   the run exits `8`. Set an output path to keep a partial result.
-- From the API, the rejected error's `partial` holds what did translate
-  (see [Errors](#errors)).
+- From the API, the rejected error's `result` holds what did translate and
+  `result.written` the files saved (see [Errors](#errors)).
 
 The hash sidecar records only the keys that actually landed, so re-running picks up
 exactly the gap instead of paying for the whole file again.
@@ -176,22 +176,22 @@ exactly the gap instead of paying for the whole file again.
 
 ```sh
 # Translate a file, write per-locale files
-loqui --input src/i18n/en.json --from en --to fr,de --output src/i18n/{locale}.json
+loqui --input src/i18n/en.json --from en --to es,de --output src/i18n/{locale}.json
 
 # Pipe JSON through stdin, get JSON on stdout
 cat en.json | loqui --from en --to ja
 
 # Inline JSON as a positional arg
-loqui '{"hello":"Hello"}' --from en --to fr
+loqui '{"hello":"Hello"}' --from en --to es
 
 # Incremental — only re-translate changed keys
-loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --incremental
+loqui --input en.json --from en --to es,de --output ./i18n/{locale}.json --incremental
 
 # Dry run — preview without any API calls or file writes
-loqui --input en.json --from en --to fr --dry-run
+loqui --input en.json --from en --to es --dry-run
 
 # Use a different engine and model
-loqui --input en.json --from en --to fr --engine anthropic --model claude-opus-4-6
+loqui --input en.json --from en --to es --engine anthropic --model claude-opus-4-6
 ```
 
 ---
@@ -204,11 +204,12 @@ import { translate } from "@mihairo/loqui";
 const result = await translate({
   input: "./en.json", // file path or raw JSON string
   from: "en",
-  to: ["de", "es", "fr", "pt"],
+  to: ["de", "es", "pt"],
   output: "./i18n/{locale}.json",
 });
 
-// result: { de: '{"hello":"Hallo"}', fr: '{"hello":"Bonjour"}', ... }
+// result.locales: { de: { hello: "Hallo" }, es: { hello: "Hola" }, pt: { ... } }
+// result.written: { de: "./i18n/de.json", ... }
 ```
 
 ### `TranslateOptions`
@@ -226,39 +227,138 @@ interface TranslateOptions {
   translationMemoryFile?: string; // custom translation-memory path (implies translationMemory)
   force?: boolean; // re-translate all keys
   dryRun?: boolean; // no API calls or writes
-  diff?: boolean; // report added, removed and changed keys; returns {}
-  validate?: boolean; // check targets have the source's keys; returns {}, sets process.exitCode on a mismatch
   engine?: EngineAdapter; // custom engine instance
+  logger?: LogFn; // receives progress, retries and warnings; without one nothing is printed
   config?: Partial<LoquiConfig>; // inline config overrides
   configPath?: string; // path to config file or directory
 }
 ```
 
+### Logging
+
+`translate()` writes nothing to stdout or stderr unless you give it a `logger`. The
+logger receives each message with a level — `info` for progress, `warn` for warnings,
+`debug` for retries and per-key detail. Every `warn` message is also in the run's
+`stats.warnings`.
+
+```typescript
+import { translate, stderrLogger } from "@mihairo/loqui";
+
+// print what the CLI prints: colour on a terminal, plain otherwise
+await translate({ input: "./en.json", from: "en", to: ["es"], logger: stderrLogger });
+
+// or route it anywhere
+await translate({
+  input: "./en.json",
+  from: "en",
+  to: ["es"],
+  logger: (level, message) => myLogger[level](message),
+});
+```
+
+A custom engine can report through the same logger by implementing the optional
+`setLogger(log)`; `BaseEngine` already does.
+
+### Inspecting target files
+
+`diff()` and `validate()` are separate functions: they only read files, so they are
+synchronous, and they never log, write, or touch `process.exitCode`. Neither needs `from`.
+
+```typescript
+import { diff, validate } from "@mihairo/loqui";
+
+const options = { input: "./en.json", to: ["es", "pt"], output: "./i18n/{locale}.json" };
+
+const { results, hasBaseline } = diff(options);
+// results: [{ locale: "es", added: [...], removed: [...], changed: [...], unchanged: [...] }, ...]
+// hasBaseline is false when there is no hash sidecar: nothing can be reported as changed
+
+const checks = validate(options);
+const broken = checks.filter((r) => r.missing.length > 0 || r.extra.length > 0);
+if (broken.length > 0) process.exitCode = 1; // yours to decide
+```
+
+`InspectOptions` are `input`, `to`, `output` (the target files to inspect), `hashFile`,
+`config` and `configPath`. A locale without a target file is absent from the results.
+`translate()` rejects a call that still passes `diff` or `validate` with `INVALID_CONFIG`,
+before it reads a file or calls an engine.
+
 ### Return value
 
-`translate()` returns `Promise<Record<string, string>>` — a map from locale to serialised JSON string.
+`translate()` resolves with a `TranslateResult`:
 
-If `output` is specified, files are written to disk and the same map is still returned.
+```typescript
+interface TranslateResult {
+  locales: Record<string, JsonObject>; // one full document per target locale, keys sorted
+  stats: RunStats; // keysTranslated, apiRequests, elapsedMs, failedChunks, warnings
+  removed: Record<string, string[]>; // keys pruned from each locale's existing file
+  written: Record<string, string>; // locale → path; empty on a dry run or without `output`
+}
+```
+
+Documents are objects. Serialise them yourself with `JSON.stringify(doc, null, 2)` when
+you need text. If `output` is specified, files are written to disk and the same
+result is still returned.
+
+### In-memory use
+
+`translateObject()` is the core `translate()` is built on: no files read or written, no
+config-file lookup. Everything comes in as data and goes back out as data, so you decide
+what to persist.
+
+```typescript
+import { translateObject } from "@mihairo/loqui";
+
+const run = await translateObject(
+  { hello: "Hello" },
+  { from: "en", to: ["es", "pt"], hashes: {}, existing: { es: { bye: "Adiós" } } },
+);
+
+run.locales.es; // { hello: "Hola" }
+run.removed.es; // ["bye"]: pruned, the source no longer has it
+// persist run.hashes and run.memory to make the next run incremental
+```
+
+Options: `from`, `to`, `config` (merged over the defaults and validated), `existing`
+(documents by locale), `hashes` (passing it turns incremental on), `memory`, `glossary`
+(resolved terms and a do-not-translate list), `namespace`, `force`, `dryRun`, `engine`
+and `logger`. It resolves with an `ObjectRun`: a `TranslationRun` (`locales`, `stats`,
+`removed`) plus the updated `hashes` and `memory`.
 
 ### Errors
 
 `translate()` rejects with a `LoquiError`. Its `code` is one of the names in the
-[exit-code table](#exit-codes). When some chunks failed and others succeeded, `partial`
-is a locale → JSON string map of what did translate, in the same shape `translate()`
-returns. It is absent when nothing landed.
+[exit-code table](#exit-codes). When chunks failed, `result` holds the run as far as it
+got: `locales` with what did translate, `stats` with the warnings, and for
+`translateObject()` the `hashes` and `memory` to persist. From `translate()`,
+`result.written` names the files saved before it gave up. A run that stops before sending
+anything (bad config, unreadable input) has no `result`.
 
 ```typescript
 import { translate, LoquiError } from "@mihairo/loqui";
 
 try {
-  await translate({ input: "./en.json", from: "en", to: ["fr", "de"] });
+  await translate({ input: "./en.json", from: "en", to: ["es", "de"] });
 } catch (err) {
   if (err instanceof LoquiError && err.code === "CHUNK_FAILED") {
-    console.warn(Object.keys(err.partial ?? {})); // locales with output to salvage
+    console.warn(Object.keys(err.result?.locales ?? {})); // locales with output to salvage
+    console.warn(err.result?.written); // files already saved
   }
   throw err;
 }
 ```
+
+### Migrating from v2
+
+| v2                                                          | v3                                                   |
+| ----------------------------------------------------------- | ---------------------------------------------------- |
+| `JSON.parse((await translate(o)).es)`                       | `(await translate(o)).locales.es`                    |
+| `translate({ ...o, diff: true })`                           | `diff(o)`                                            |
+| `translate({ ...o, validate: true })`, then `process.exitCode` | `validate(o)`, then check the result              |
+| `err.partial`                                               | `err.result.locales`                                 |
+| progress printed to stderr                                  | pass `logger: stderrLogger`                          |
+| CLI: several locales as JSON strings inside JSON            | one JSON document                                    |
+| CLI: `--diff` / `--validate` report on stderr               | on stdout                                            |
 
 ---
 
@@ -273,7 +373,7 @@ import { join } from "path";
 
 const I18N_DIR = "src/assets/i18n";
 const FROM = "en";
-const TO = ["fr", "de", "es"];
+const TO = ["es", "pt", "de"];
 
 const namespaces = readdirSync(I18N_DIR, { withFileTypes: true })
   .filter((d) => d.isDirectory())
@@ -300,10 +400,10 @@ booleans, `null`, empty objects and empty arrays — is carried through untouche
 restored exactly as it was parsed.
 
 ```jsonc
-// en.json                              // fr.json
+// en.json                              // es.json
 {                                       {
-  "title": "Welcome",                     "title": "Bienvenue",
-  "items": ["one", "two"],                "items": ["un", "deux"],
+  "title": "Welcome",                     "title": "Bienvenido",
+  "items": ["one", "two"],                "items": ["uno", "dos"],
   "maxRetries": 3,                        "maxRetries": 3,
   "beta": false,                          "beta": false,
   "note": null                            "note": null
@@ -386,14 +486,14 @@ Lock specific terms so they always translate consistently, and mark brand/produc
 ```
 glossary/
   es.json  →  { "Dashboard": "Tablero", "Settings": "Configuración" }
-  fr.json  →  { "Dashboard": "Tableau de bord" }
+  pt.json  →  { "Dashboard": "Painel" }
 ```
 
 **2. Combined file** — `glossary.path` points to a single JSON file:
 
 ```json
 {
-  "Dashboard": { "es": "Tablero", "fr": "Tableau de bord" }
+  "Dashboard": { "es": "Tablero", "pt": "Painel" }
 }
 ```
 
@@ -425,14 +525,16 @@ A memory file written by an earlier version is ignored with a warning, and rebui
 
 ## Inspecting without translating
 
-Both of these report to stderr, write nothing, and make no API calls.
+Both of these print their report on stdout, write nothing, and make no API calls.
+Diagnostics, such as the warning that there is no hash sidecar, go to stderr. From code,
+use [`diff()` and `validate()`](#inspecting-target-files).
 
 ```sh
 # What has been added, removed or changed since the last run
-loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --diff
+loqui --input en.json --to es,de --output ./i18n/{locale}.json --diff
 
 # Do the target locales have the same key set as the source?
-loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --validate
+loqui --input en.json --to es,de --output ./i18n/{locale}.json --validate
 ```
 
 `--diff` reports **changed** by comparing the current source against the hashes
@@ -452,7 +554,7 @@ outstanding. Keys deleted from the source are pruned from the sidecar, which the
 tracks the source rather than growing forever.
 
 ```sh
-loqui --input en.json --from en --to fr,de --output ./i18n/{locale}.json --incremental
+loqui --input en.json --from en --to es,de --output ./i18n/{locale}.json --incremental
 ```
 
 The hash file path can be customised:
@@ -518,7 +620,7 @@ const myEngine: EngineAdapter = {
   },
 };
 
-await translate({ input: "en.json", from: "en", to: ["fr"], engine: myEngine });
+await translate({ input: "en.json", from: "en", to: ["es"], engine: myEngine });
 ```
 
 Or extend `BaseEngine` to reuse the built-in prompt builder and JSON response parser:
@@ -553,7 +655,7 @@ class MyEngine extends BaseEngine {
 await translate({
   input: "en.json",
   from: "en",
-  to: ["fr"],
+  to: ["es"],
   engine: new MyEngine(config),
 });
 ```
@@ -586,7 +688,7 @@ await translate({
 | `stopped at the output token limit` (exit 10) | A single value is too long for the model's output limit. loqui already splits a cut-off chunk and retries the halves | Shorten or split that value, or use a model with a larger output limit |
 | `chunk(s) failed` (exit 8) | Some chunks failed after retries | With an output path, the rest was already written — re-run to retry only the gap. Without one, nothing was saved |
 | `Could not parse <file> as JSON` (exit 7) | A target file, hash sidecar, translation-memory file or glossary file is not valid JSON, for example a merge-conflict marker | loqui stops and leaves the file alone — fix or delete it, then re-run |
-| `unexpected argument: …` or `… needs a value` (exit 11) | An extra positional argument, as in `--to fr de`, or a value flag followed by another flag | Pass locales as `--to fr,de`; give the flag its value, or write it as `--flag=value` |
+| `unexpected argument: …` or `… needs a value` (exit 11) | An extra positional argument, as in `--to es de`, or a value flag followed by another flag | Pass locales as `--to es,de`; give the flag its value, or write it as `--flag=value` |
 | `was not sent for translation` | A source string has an ICU plural/select block that is never closed | Fix the braces in the source string; the other keys are still translated |
 | `returned a body that is not JSON` (exit 6) | A proxy or gateway answered in place of the API | Check any proxy or gateway between you and the API, then re-run |
 | `--diff` reports nothing as changed | No hash sidecar yet | Run once with `--incremental` to start recording source hashes |
@@ -633,10 +735,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
       - run: npm ci
-      - run: npx @mihairo/loqui --input src/i18n/en.json --from en --to fr,de,es --output src/i18n/{locale}.json --incremental
+      - run: npx @mihairo/loqui --input src/i18n/en.json --from en --to es,pt,de --output src/i18n/{locale}.json --incremental
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       - uses: peter-evans/create-pull-request@v6
@@ -646,9 +748,7 @@ jobs:
           branch: i18n/update
 ```
 
-### Create your own action
-
-A standalone GitHub Action reference is available at [.github/actions/loqui/action.yml](.github/actions/loqui/action.yml) for use in other repositories.
+To run loqui in another repository, copy this workflow into its `.github/workflows/`.
 
 ---
 

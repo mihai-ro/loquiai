@@ -10,13 +10,20 @@ export type LoquiErrorCode =
   | 'TRUNCATED'
   | 'INVALID_USAGE';
 
+export interface LoquiErrorOptions extends ErrorOptions {
+  /** What a failed run did translate: locale to serialized JSON, the shape `translate()` returns. */
+  partial?: Record<string, string>;
+}
+
 export class LoquiError extends Error {
   readonly code: LoquiErrorCode;
+  readonly partial?: Record<string, string>;
 
-  constructor(code: LoquiErrorCode, message: string, options?: ErrorOptions) {
+  constructor(code: LoquiErrorCode, message: string, options?: LoquiErrorOptions) {
     super(message, options);
     this.name = 'LoquiError';
     this.code = code;
+    this.partial = options?.partial;
     // Restore prototype chain for instanceof checks across compilation targets.
     Object.setPrototypeOf(this, new.target.prototype);
   }

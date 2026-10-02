@@ -471,6 +471,355 @@ describe('translateJson — chunk failure handling', () => {
   });
 });
 
+describe('translateJson — a changed key that did not land', () => {
+  const oldHash = hashValue('Old text');
+  const newSource = 'New text';
+
+  /** Throws for any chunk holding `failOn`; uppercases the rest. Records what it was sent. */
+  function recordingEngine(failOn: string[], sent: string[] = []): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        sent.push(...Object.keys(chunk.keys));
+        if (Object.keys(chunk.keys).some((k) => failOn.includes(k))) throw new Error('API exploded');
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+          };
+        }
+        return result;
+      },
+    };
+  }
+
+  // `changed` has a stale fr value and an old hash; `fresh` gives the run a chunk that succeeds.
+  const sourceFlat = { changed: newSource, fresh: 'Fresh' };
+  const existing = { fr: { changed: 'ANCIENNE' } };
+  const hashStore = { changed: oldHash };
+
+  function runWithFailingChunk(sent: string[] = []) {
+    return translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      // splitToken of 1 puts each key in its own chunk, so `changed` can fail alone
+      config: { ...config, splitToken: 1 },
+      existing,
+      hashStore,
+      translationMemory: {},
+      engine: recordingEngine(['changed'], sent),
+    });
+  }
+
+  test('keeps the old hash when its chunk fails', async () => {
+    const { updatedHashStore } = await runWithFailingChunk();
+
+    assert.equal(updatedHashStore.changed, oldHash, 'a stale value must not be recorded as current');
+  });
+
+  test('does not write the stale value to translation memory under the new hash', async () => {
+    const { updatedTranslationMemory } = await runWithFailingChunk();
+
+    assert.equal(updatedTranslationMemory[hashValue(newSource)], undefined);
+  });
+
+  test('sends the key to the engine again on the next run', async () => {
+    const first = await runWithFailingChunk();
+
+    const sent: string[] = [];
+    await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...config, splitToken: 1 },
+      existing: first.translations,
+      hashStore: first.updatedHashStore,
+      translationMemory: first.updatedTranslationMemory,
+      engine: recordingEngine([], sent),
+    });
+
+    assert.deepEqual(sent, ['changed'], 'the retry is the gap and nothing else');
+  });
+
+  test('a key skipped for one locale keeps its old hash and is remembered only for the locale that landed', async () => {
+    // de drops the placeholder, so its result is rejected; fr keeps it
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(
+              Object.entries(chunk.keys).map(([k, v]) => [k, locale === 'de' ? v.replace(/⟦\d+⟧/g, '') : v]),
+            ),
+          };
+        }
+        return result;
+      },
+    };
+    const source = { changed: 'Hello ${name}' };
+
+    const { updatedHashStore, updatedTranslationMemory, translations } = await translateJson({
+      sourceFlat: source,
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      existing: { fr: { changed: 'ANCIEN ${name}' }, de: { changed: 'ALT ${name}' } },
+      hashStore: { changed: oldHash },
+      translationMemory: {},
+      engine,
+    });
+
+    assert.equal(translations.de.changed, 'ALT ${name}', 'precondition: the de result was rejected');
+    assert.equal(updatedHashStore.changed, oldHash);
+    assert.deepEqual(updatedTranslationMemory[hashValue('Hello ${name}')], { fr: 'Hello ${name}' });
+  });
+
+  describe('with one locale served from translation memory', () => {
+    const memoryHash = hashValue(newSource);
+    const translationMemory = () => ({ [memoryHash]: { fr: 'MEMOIRE' } });
+    const existingLocales = { fr: { changed: 'ANCIENNE' }, de: { changed: 'ALTE' } };
+
+    test('records the new hash and both locales once the engine delivers the other one', async () => {
+      const { updatedHashStore, updatedTranslationMemory, translations } = await translateJson({
+        sourceFlat: { changed: newSource },
+        from: 'en',
+        to: ['fr', 'de'],
+        namespace: 'test',
+        config,
+        existing: existingLocales,
+        hashStore: { changed: oldHash },
+        translationMemory: translationMemory(),
+        engine: recordingEngine([]),
+      });
+
+      assert.equal(translations.fr.changed, 'MEMOIRE');
+      assert.equal(updatedHashStore.changed, hashValue(newSource));
+      assert.deepEqual(updatedTranslationMemory[memoryHash], { fr: 'MEMOIRE', de: 'NEW TEXT' });
+    });
+
+    test('keeps the old hash and the memory entry as it was when the engine fails for the other one', async () => {
+      const { updatedHashStore, updatedTranslationMemory, translations } = await translateJson({
+        sourceFlat: { changed: newSource, fresh: 'Fresh' },
+        from: 'en',
+        to: ['fr', 'de'],
+        namespace: 'test',
+        config: { ...config, splitToken: 1 },
+        existing: existingLocales,
+        hashStore: { changed: oldHash },
+        translationMemory: translationMemory(),
+        engine: recordingEngine(['changed']),
+      });
+
+      assert.equal(translations.fr.changed, 'MEMOIRE');
+      assert.equal(updatedHashStore.changed, oldHash);
+      assert.deepEqual(updatedTranslationMemory[memoryHash], { fr: 'MEMOIRE' });
+    });
+  });
+});
+
+describe('translateJson — a malformed ICU value', () => {
+  const UNBALANCED = '{g, select, male {he} other {they}} bought {n, plural, one {# item} other {# items}';
+
+  function recordingEngine(sent: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        sent.push(...Object.keys(chunk.keys));
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+          };
+        }
+        return result;
+      },
+    };
+  }
+
+  test('is left out of the chunk, named in a warning, and does not take its neighbours down', async () => {
+    const sent: string[] = [];
+
+    const { translations, stats, failure } = await translateJson({
+      sourceFlat: { greeting: 'Hello', bought: UNBALANCED, farewell: 'Goodbye' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent.sort(), ['farewell', 'greeting'], 'the malformed value must never reach the engine');
+    assert.ok(
+      stats.warnings.some((w) => w.includes('"bought"')),
+      'the warning has to name the key',
+    );
+    assert.equal(translations.fr.greeting, 'HELLO');
+    assert.equal(translations.fr.farewell, 'GOODBYE');
+    assert.equal(translations.fr.bought, undefined);
+    assert.equal(failure, undefined, 'one skipped value is not a failed chunk');
+    assert.equal(stats.failedChunks, 0);
+  });
+
+  test('is not recorded as done, so the next run reports it again', async () => {
+    const { updatedHashStore } = await translateJson({
+      sourceFlat: { greeting: 'Hello', bought: UNBALANCED },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: recordingEngine([]),
+    });
+
+    assert.equal(updatedHashStore.greeting, hashValue('Hello'));
+    assert.ok(!('bought' in updatedHashStore));
+  });
+
+  test('makes no engine call for a chunk where every value is malformed', async () => {
+    const sent: string[] = [];
+
+    const { stats } = await translateJson({
+      sourceFlat: { bought: UNBALANCED },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, []);
+    assert.equal(stats.apiRequests, 0);
+    assert.ok(stats.warnings.some((w) => w.includes('"bought"')));
+  });
+
+  test('an invalid placeholder pattern still fails the run', async () => {
+    const { failure, stats } = await translateJson({
+      sourceFlat: { greeting: 'Hello' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...config, placeholderPatterns: ['('] },
+      engine: recordingEngine([]),
+    });
+
+    assert.ok(failure, 'a config error must not be swallowed as a skipped key');
+    assert.equal(stats.failedChunks, 1);
+    assert.ok(stats.warnings.some((w) => w.includes('Invalid placeholder pattern')));
+  });
+});
+
+describe('translateJson — empty source values', () => {
+  function recordingEngine(sent: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        sent.push(...Object.keys(chunk.keys));
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+          };
+        }
+        return result;
+      },
+    };
+  }
+
+  const sourceFlat = { blank: '', title: 'Hi' };
+
+  test('are copied to every locale and never sent to the engine', async () => {
+    const sent: string[] = [];
+
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr', 'de'],
+      namespace: 'test',
+      config,
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, ['title']);
+    assert.equal(translations.fr.blank, '');
+    assert.equal(translations.de.blank, '');
+    assert.equal(translations.fr.title, 'HI');
+  });
+
+  test('are not counted as translated, and a whitespace-only value is copied as it is', async () => {
+    const { translations, stats } = await translateJson({
+      sourceFlat: { gap: '  ', title: 'Hi' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: recordingEngine([]),
+    });
+
+    assert.equal(translations.fr.gap, '  ');
+    assert.equal(stats.keysTranslated, 1);
+  });
+
+  test('are recorded as done, so the next run over the output makes no request', async () => {
+    const first = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: recordingEngine([]),
+    });
+    assert.equal(first.updatedHashStore.blank, hashValue(''));
+
+    const sent: string[] = [];
+    const second = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: first.translations,
+      hashStore: first.updatedHashStore,
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, []);
+    assert.equal(second.stats.apiRequests, 0);
+  });
+
+  test('are copied under --force as well', async () => {
+    const sent: string[] = [];
+
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { blank: 'STALE', title: 'OLD' } },
+      force: true,
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, ['title']);
+    assert.equal(translations.fr.blank, '');
+  });
+
+  test('leave a value already in the target alone while the source is unchanged', async () => {
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { blank: 'KEEP', title: 'SALUT' } },
+      hashStore: { blank: hashValue(''), title: hashValue('Hi') },
+      engine: recordingEngine([]),
+    });
+
+    assert.equal(translations.fr.blank, 'KEEP');
+  });
+});
+
 describe('translateJson — failure code collapsing', () => {
   /** Every chunk fails the same way, the way a bad API key behaves. */
   function alwaysFails(err: Error): EngineAdapter {

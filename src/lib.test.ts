@@ -453,6 +453,80 @@ describe('translate — non-string values survive the round trip', () => {
   });
 });
 
+describe('translate — a corrupt file is an error, not an empty file', () => {
+  const CONFLICT = '<<<<<<< HEAD\n{"a":"b"}\n=======\n{"a":"c"}\n>>>>>>> branch\n';
+
+  function countingEngine(): { engine: EngineAdapter; calls: () => number } {
+    let calls = 0;
+    const inner = makeEngine();
+    return {
+      engine: {
+        async translateChunk(...args) {
+          calls++;
+          return inner.translateChunk(...args);
+        },
+      },
+      calls: () => calls,
+    };
+  }
+
+  function project(): { dir: string; input: string } {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify({ greeting: 'Hello' }), 'utf-8');
+    return { dir, input };
+  }
+
+  test('a target file with a merge-conflict marker fails with PARSE_ERROR and is left alone', async () => {
+    const { dir, input } = project();
+    const target = path.join(dir, 'fr.json');
+    fs.writeFileSync(target, CONFLICT, 'utf-8');
+    const { engine, calls } = countingEngine();
+
+    await assert.rejects(
+      translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'PARSE_ERROR' && err.message.includes(target),
+    );
+
+    assert.equal(calls(), 0, 'nothing may be sent to a paid engine on top of a file we could not read');
+    assert.equal(fs.readFileSync(target, 'utf-8'), CONFLICT);
+  });
+
+  test('a corrupt hash sidecar fails an incremental run instead of resetting change detection', async () => {
+    const { dir, input } = project();
+    const hashFile = path.join(dir, 'hashes.json');
+    fs.writeFileSync(hashFile, CONFLICT, 'utf-8');
+    const { engine, calls } = countingEngine();
+
+    await assert.rejects(
+      translate({ input, from: 'en', to: ['fr'], hashFile, engine }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'PARSE_ERROR' && err.message.includes(hashFile),
+    );
+
+    assert.equal(calls(), 0);
+  });
+
+  test('a corrupt hash sidecar fails --diff, which reads it', async () => {
+    const { dir, input } = project();
+    fs.writeFileSync(path.join(dir, '.en.loqui-hash.json'), CONFLICT, 'utf-8');
+
+    await assert.rejects(
+      translate({ input, from: 'en', to: ['fr'], diff: true }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'PARSE_ERROR',
+    );
+  });
+
+  test('a corrupt hash sidecar the run does not use cannot fail it', async () => {
+    const { dir, input } = project();
+    fs.writeFileSync(path.join(dir, '.en.loqui-hash.json'), CONFLICT, 'utf-8');
+
+    const result = await translate({ input, from: 'en', to: ['fr'], engine: makeEngine() });
+
+    assert.equal(JSON.parse(result.fr).greeting, 'HELLO');
+  });
+});
+
 describe('translate — a partial run keeps what it paid for', () => {
   // Long enough that each key lands in its own chunk at the minimum legal splitToken,
   // so one chunk can fail while the other succeeds.
@@ -497,6 +571,113 @@ describe('translate — a partial run keeps what it paid for', () => {
     const written = JSON.parse(fs.readFileSync(path.join(dir, 'fr.json'), 'utf-8'));
     assert.equal(written.keep, KEEP.toUpperCase(), 'the chunk that succeeded was paid for and must reach disk');
     assert.equal(written.boom, undefined);
+  });
+
+  describe('without an output path', () => {
+    const input = JSON.stringify({ keep: KEEP, boom: BOOM });
+
+    async function rejection(engine: EngineAdapter): Promise<LoquiError> {
+      try {
+        await translate({ input, from: 'en', to: ['fr'], config: { splitToken: 500 }, engine });
+      } catch (err) {
+        if (err instanceof LoquiError) return err;
+        throw err;
+      }
+      assert.fail('translate() should have rejected');
+    }
+
+    test('hands the partial result back on the error', async () => {
+      const err = await rejection(flakyEngine(['boom']));
+
+      assert.equal(err.code, 'CHUNK_FAILED');
+      assert.ok(err.partial?.fr, 'the paid-for chunk must be reachable when nothing is written');
+      assert.equal(JSON.parse(err.partial.fr).keep, KEEP.toUpperCase());
+    });
+
+    test('keeps the aggregate as the cause', async () => {
+      const err = await rejection(flakyEngine(['boom']));
+
+      assert.ok(err.cause instanceof AggregateError);
+    });
+
+    test('does not claim anything was written', async () => {
+      const err = await rejection(flakyEngine(['boom']));
+
+      assert.doesNotMatch(err.message, /was written/);
+      assert.match(err.message, /nothing was saved/i);
+    });
+
+    test('carries no partial when nothing landed, and keeps the engine error as it was', async () => {
+      const err = await rejection({
+        async translateChunk() {
+          throw new LoquiError('AUTH', 'OpenAI API error 401: invalid key');
+        },
+      });
+
+      assert.equal(err.code, 'AUTH');
+      assert.equal(err.message, 'OpenAI API error 401: invalid key');
+      assert.equal(err.partial, undefined);
+    });
+  });
+
+  describe('when every chunk fails the same way but translation memory served a key', () => {
+    const authError = new LoquiError('AUTH', 'OpenAI API error 401: invalid key');
+    const failing: EngineAdapter = {
+      async translateChunk() {
+        throw authError;
+      },
+    };
+
+    async function rejection(withOutput: boolean): Promise<LoquiError> {
+      const dir = nextTmp();
+      fs.mkdirSync(dir, { recursive: true });
+      const tmFile = path.join(dir, 'tm.json');
+      fs.writeFileSync(tmFile, JSON.stringify({ [hashValue('Hello')]: { fr: 'Bonjour' } }), 'utf-8');
+      try {
+        await translate({
+          input: JSON.stringify({ served: 'Hello', sent: 'World' }),
+          from: 'en',
+          to: ['fr'],
+          translationMemoryFile: tmFile,
+          output: withOutput ? path.join(dir, '{locale}.json') : undefined,
+          engine: failing,
+        });
+      } catch (err) {
+        if (err instanceof LoquiError) return err;
+        throw err;
+      }
+      assert.fail('translate() should have rejected');
+    }
+
+    for (const withOutput of [false, true]) {
+      test(`keeps the engine's code and message and attaches what was served (output: ${withOutput})`, async () => {
+        const err = await rejection(withOutput);
+
+        assert.equal(err.code, 'AUTH');
+        assert.equal(err.message, authError.message);
+        assert.equal(err.cause, authError, 'the original error stays reachable');
+        assert.ok(err.partial?.fr);
+        assert.deepEqual(JSON.parse(err.partial.fr), { served: 'Bonjour' });
+      });
+    }
+  });
+
+  test('says the output was written when there is an output path', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+
+    await assert.rejects(
+      translate({
+        input: JSON.stringify({ keep: KEEP, boom: BOOM }),
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        config: { splitToken: 500 },
+        engine: flakyEngine(['boom']),
+      }),
+      (err: unknown) =>
+        err instanceof LoquiError && /written to disk/.test(err.message) && !/nothing was saved/i.test(err.message),
+    );
   });
 
   test('the hash sidecar records only the keys that landed, so the next run retries the gap', async () => {

@@ -22,6 +22,17 @@ function lruSet<K, V>(cache: Map<K, V>, key: K, val: V, max: number): void {
   cache.set(key, val);
 }
 
+/**
+ * A value whose ICU blocks cannot all be masked. Distinct from a bad config pattern so a
+ * caller can skip the one value and carry on, while a config error still fails the run.
+ */
+export class IcuMaskError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IcuMaskError';
+  }
+}
+
 const customRegexCache = new Map<string, RegExp>();
 
 export interface MaskResult {
@@ -94,9 +105,9 @@ function maskIcuBlocks(input: string, mask: (token: string) => string): string {
   let result = input;
 
   // Each pass consumes one block, so the loop terminates on any real string. The cap
-  // only guards against a pathological one — and it has to be loud: returning a
-  // half-masked string would send the remaining ICU blocks to the model unprotected,
-  // where nothing downstream can tell they were ever there.
+  // and an unclosed block both have to be loud: returning a half-masked string would
+  // send the remaining ICU blocks to the model unprotected, where nothing downstream
+  // can tell they were ever there.
   let remaining = ICU_BLOCK_LIMIT;
   while (remaining-- > 0) {
     ICU_START.lastIndex = 0;
@@ -105,13 +116,18 @@ function maskIcuBlocks(input: string, mask: (token: string) => string): string {
 
     const start = match.index;
     const full = extractBalancedBraces(result, start);
-    if (!full) break;
+    if (!full) {
+      throw new IcuMaskError(
+        'An ICU block is never closed — the string is almost certainly malformed. ' +
+          'Refusing to translate it half-masked, which would leave the rest unprotected.',
+      );
+    }
 
     result = result.slice(0, start) + mask(full) + result.slice(start + full.length);
   }
 
   if (remaining < 0) {
-    throw new Error(
+    throw new IcuMaskError(
       `More than ${ICU_BLOCK_LIMIT} ICU blocks in a single value — the string is almost certainly malformed. ` +
         'Refusing to translate it half-masked, which would leave the rest unprotected.',
     );

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { maskPlaceholders, restorePlaceholders } from './placeholder.js';
+import { IcuMaskError, maskPlaceholders, restorePlaceholders } from './placeholder.js';
 
 describe('maskPlaceholders', () => {
   test('masks {{double mustache}} tokens', () => {
@@ -105,6 +105,35 @@ describe('maskPlaceholders — ICU block limit', () => {
     assert.throws(
       () => maskPlaceholders(value),
       (err: unknown) => err instanceof Error && /ICU blocks/.test(err.message),
+    );
+  });
+});
+
+describe('maskPlaceholders — unbalanced ICU block', () => {
+  const UNBALANCED = '{g, select, male {he} other {they}} bought {n, plural, one {# item} other {# items}';
+
+  test('refuses a value with an unclosed block instead of sending it unmasked', () => {
+    assert.throws(
+      () => maskPlaceholders(UNBALANCED),
+      (err: unknown) => err instanceof IcuMaskError && /ICU block/.test(err.message),
+    );
+  });
+
+  test('refuses a block that closes too early the same way', () => {
+    assert.throws(() => maskPlaceholders('{n, plural, one {# item} other {# items'), IcuMaskError);
+  });
+
+  test('raises the same error class past the block limit', () => {
+    const value = Array.from({ length: 1001 }, (_, i) => `{n${i}, plural, one {#} other {#}}`).join(' ');
+
+    assert.throws(() => maskPlaceholders(value), IcuMaskError);
+  });
+
+  test('a bad custom pattern is not an ICU failure', () => {
+    assert.throws(
+      () => maskPlaceholders('Hello', ['(']),
+      (err: unknown) =>
+        err instanceof Error && !(err instanceof IcuMaskError) && /Invalid placeholder pattern/.test(err.message),
     );
   });
 });

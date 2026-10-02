@@ -96,7 +96,8 @@ export interface TranslateOptions {
  *   If `output` is specified, files are also written to disk.
  * @throws If `from` or `to` are not provided (directly or via config).
  * @throws If the input cannot be parsed as JSON.
- * @throws If any translation chunk fails after all retries.
+ * @throws If any translation chunk fails after all retries. The error's `partial` holds the
+ *   locale → JSON string map of whatever did translate, when anything did.
  *
  * @example
  * import { translate } from '@mihairo/loqui';
@@ -172,14 +173,15 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
   }
 
   // Resolved before diff mode, which reads the store to tell a changed source from
-  // a translated value. The translation path below still gates use on --incremental.
+  // a translated value. Read only when a mode uses it: a corrupt sidecar the run
+  // never consults must not fail it.
   const useIncremental = options.incremental || Boolean(options.hashFile);
   const hashFilePath =
     options.hashFile ??
     (inputPath
       ? path.join(path.dirname(inputPath), `.${path.basename(inputPath, path.extname(inputPath))}.loqui-hash.json`)
       : null);
-  const hashStore: HashStore = hashFilePath ? loadHashStore(hashFilePath) : {};
+  const hashStore: HashStore = hashFilePath && (options.diff || useIncremental) ? loadHashStore(hashFilePath) : {};
 
   // Diff mode: compare and report without translating
   if (options.diff) {
@@ -297,9 +299,31 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
 
   // Raised only after everything that succeeded has been written, so a partial run
   // still leaves its output on disk and the next run resumes from the gap.
-  if (failure) throw failure;
+  if (failure) throw completeFailure(failure, nothingLanded ? undefined : result, outputPaths !== null);
 
   return result;
+}
+
+/**
+ * The translator cannot tell whether its output was written, so the message is finished
+ * here, and the partial result rides on the error for callers that wrote nothing.
+ * An engine error that failed every chunk keeps its own message: a caller acts on it.
+ */
+function completeFailure(
+  failure: LoquiError,
+  partial: Record<string, string> | undefined,
+  wroteOutput: boolean,
+): LoquiError {
+  if (failure.code !== 'CHUNK_FAILED') {
+    return partial ? new LoquiError(failure.code, failure.message, { cause: failure, partial }) : failure;
+  }
+  let outcome = 'Nothing succeeded, so there is nothing to write.';
+  if (partial) {
+    outcome = wroteOutput
+      ? 'Output for the chunks that succeeded was written to disk; re-run to retry the rest.'
+      : 'No output path is set, so nothing was saved. Set one to keep partial results; API callers can read error.partial.';
+  }
+  return new LoquiError('CHUNK_FAILED', `${failure.message} ${outcome}`, { cause: failure.cause, partial });
 }
 
 function resolveOutputPaths(

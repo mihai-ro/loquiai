@@ -29,6 +29,13 @@ describe('LoquiError', () => {
     assert.equal(err.cause, cause);
   });
 
+  test('can carry a partial result', () => {
+    const partial = { fr: '{}\n' };
+    const err = new LoquiError('CHUNK_FAILED', 'chunk 1 failed', { partial });
+    assert.equal(err.partial, partial);
+    assert.equal(new LoquiError('CHUNK_FAILED', 'chunk 1 failed').partial, undefined);
+  });
+
   test('passes instanceof check after serialization round-trip', () => {
     const err = new LoquiError('PARSE_ERROR', 'oops');
     const wrapped = new Error('wrapper', { cause: err });

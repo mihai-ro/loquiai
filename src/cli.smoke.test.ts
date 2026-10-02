@@ -68,6 +68,33 @@ describe('built CLI — ESM entry through a symlink', () => {
   });
 });
 
+describe('built CLI — usage errors exit 11', () => {
+  const run = (args: string[], input?: string) =>
+    spawnSync(process.execPath, [binLink, ...args], { encoding: 'utf-8', cwd: tmpDir, input });
+
+  test('a second positional names the token it would drop', () => {
+    const result = run(['{"a":"x"}', '--from', 'en', '--to', 'fr', 'de']);
+
+    assert.equal(result.status, 11);
+    assert.match(result.stderr, /de/);
+    assert.equal(result.stdout, '');
+  });
+
+  test('a value flag followed by a flag names the flag', () => {
+    const result = run(['{"a":"x"}', '--output', '--incremental']);
+
+    assert.equal(result.status, 11);
+    assert.match(result.stderr, /--output/);
+  });
+
+  test('empty stdin exits 11', () => {
+    const result = run(['--from', 'en', '--to', 'fr'], '');
+
+    assert.equal(result.status, 11);
+    assert.match(result.stderr, /empty input/);
+  });
+});
+
 describe('built CLI — CJS entry', () => {
   test('carries exactly one shebang line', () => {
     const lines = fs.readFileSync(distCjs, 'utf-8').split('\n');

@@ -44,14 +44,14 @@ Exit codes:
   1  unexpected error
   2  AUTH            — invalid or missing API key
   3  RATE_LIMIT      — rate limit exhausted after retries
-  4  TIMEOUT         — request timed out after retries
+  4  TIMEOUT         — request timed out
   5  NETWORK_ERROR   — network failure after retries
   6  INVALID_RESPONSE — API returned an unexpected response
-  7  PARSE_ERROR     — failed to parse API response as JSON
+  7  PARSE_ERROR     — a response, the input, or a file on disk is not valid JSON
   8  CHUNK_FAILED    — one or more translation chunks failed
   9  INVALID_CONFIG  — .loqui.json is missing required fields or has invalid values
   10 TRUNCATED       — the engine hit its output token limit mid-response
-  11 INVALID_USAGE   — unknown or malformed command-line option
+  11 INVALID_USAGE   — invalid command-line usage
 `.trim();
 
 import fs from 'node:fs';
@@ -87,8 +87,8 @@ const BOOLEAN_FLAGS = new Set([
   '-h',
 ]);
 
-export /** Suggests the closest known flag, so a typo names its own fix. */
-function unknownFlag(token: string, reason = 'unknown option'): LoquiError {
+/** Suggests the closest known flag, so a typo names its own fix. */
+export function unknownFlag(token: string, reason = 'unknown option'): LoquiError {
   const name = token.split('=')[0];
   const known = [...VALUE_FLAGS, ...BOOLEAN_FLAGS];
   const suggestion = known.find((flag) => isNearMiss(flag, name));
@@ -150,6 +150,13 @@ export function parseArgs(argv: string[]): Args {
     const token = tokens[i];
 
     if (!token.startsWith('-')) {
+      // `--to fr de` leaves `de` here; taking only the first would drop it without a word.
+      if (positional.length > 0) {
+        throw new LoquiError(
+          'INVALID_USAGE',
+          `unexpected argument: ${token}. Only one input is accepted; pass several locales as --to fr,de.`,
+        );
+      }
       positional.push(token);
       continue;
     }
@@ -159,7 +166,18 @@ export function parseArgs(argv: string[]): Args {
     const name = eq === -1 ? token : token.slice(0, eq);
 
     if (VALUE_FLAGS.has(name)) {
-      flags[name] = eq === -1 ? (tokens[++i] ?? '') : token.slice(eq + 1);
+      if (eq !== -1) {
+        flags[name] = token.slice(eq + 1);
+        continue;
+      }
+      // A known flag in the value slot means the value was forgotten. Anything else,
+      // dashes included, is a value: `--context --not-a-flag` stays legal.
+      const next = tokens[i + 1];
+      if (next === undefined || VALUE_FLAGS.has(next) || BOOLEAN_FLAGS.has(next)) {
+        throw new LoquiError('INVALID_USAGE', `${name} needs a value.`);
+      }
+      flags[name] = next;
+      i++;
       continue;
     }
 
@@ -172,6 +190,14 @@ export function parseArgs(argv: string[]): Args {
     // Silently accepting this is what makes a typo expensive: `--incremetal` would
     // be ignored and the whole file re-translated at full price.
     throw unknownFlag(token);
+  }
+
+  // The positional would be ignored, so `--input en.json --to fr de` would lose `de`.
+  if (flags['--input'] !== undefined && positional.length > 0) {
+    throw new LoquiError(
+      'INVALID_USAGE',
+      `unexpected argument: ${positional[0]}. --input already names the input; pass several locales as --to fr,de.`,
+    );
   }
 
   return {
@@ -226,8 +252,7 @@ export interface InitIO {
 
 export async function runInit({ input = process.stdin, output = process.stdout, cwd }: InitIO = {}): Promise<void> {
   if (!input.isTTY) {
-    logger.error('loqui init must be run in an interactive terminal.');
-    process.exit(1);
+    throw new LoquiError('INVALID_USAGE', 'loqui init must be run in an interactive terminal.');
   }
 
   const configPath = path.resolve(cwd ?? process.cwd(), '.loqui.json');
@@ -253,8 +278,7 @@ export async function runInit({ input = process.stdin, output = process.stdout, 
   const engine = await ask('  Engine [gemini / openai / anthropic] (gemini): ', 'gemini');
   if (!['gemini', 'openai', 'anthropic'].includes(engine)) {
     rl.close();
-    logger.error(`Unknown engine: "${engine}". Must be gemini, openai, or anthropic.`);
-    process.exit(1);
+    throw new LoquiError('INVALID_USAGE', `Unknown engine: "${engine}". Must be gemini, openai, or anthropic.`);
   }
 
   const defaultModel = DEFAULT_MODELS[engine as SupportedEngine] ?? 'gemini-2.5-flash';
@@ -318,13 +342,14 @@ export async function main({ stdin = process.stdin, stdout = process.stdout }: C
   let input = args.input;
   if (!input) {
     if (stdin.isTTY) {
-      logger.error('No input provided. Use --input <file|json>, a positional arg, or pipe via stdin.');
-      process.exit(1);
+      throw new LoquiError(
+        'INVALID_USAGE',
+        'No input provided. Use --input <file|json>, a positional arg, or pipe via stdin.',
+      );
     }
     input = await readStdin(stdin);
     if (!input) {
-      logger.error('Received empty input from stdin.');
-      process.exit(1);
+      throw new LoquiError('INVALID_USAGE', 'Received empty input from stdin.');
     }
   }
 

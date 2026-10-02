@@ -54,8 +54,11 @@ describe('parseArgs — value flags', () => {
     assert.equal(args.translationMemoryFile, './tm.json');
   });
 
-  test('a value flag with no following token yields an empty string', () => {
-    assert.equal(parseArgs(argv('--from')).from, '');
+  test('a value flag with no following token is rejected, naming the flag', () => {
+    assert.throws(
+      () => parseArgs(argv('--from')),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes('--from'),
+    );
   });
 
   test('does not consume the next flag as a positional', () => {
@@ -114,8 +117,23 @@ describe('parseArgs — input resolution', () => {
     assert.equal(parseArgs(argv('{"a":"b"}', '--from', 'en')).input, '{"a":"b"}');
   });
 
-  test('--input wins over a positional argument', () => {
-    assert.equal(parseArgs(argv('positional.json', '--input', 'flag.json')).input, 'flag.json');
+  test('a positional beside --input is rejected, naming it, rather than dropped', () => {
+    assert.throws(
+      () => parseArgs(argv('positional.json', '--input', 'flag.json')),
+      (err: unknown) =>
+        err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes('positional.json'),
+    );
+  });
+
+  test('--input with a trailing locale names the locale', () => {
+    assert.throws(
+      () => parseArgs(argv('--input', 'en.json', '--to', 'fr', 'de')),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes('de'),
+    );
+  });
+
+  test('--input= is the same flag as --input', () => {
+    assert.throws(() => parseArgs(argv('--input=en.json', 'de')), LoquiError);
   });
 
   test('input is null when nothing is supplied', () => {
@@ -159,42 +177,6 @@ async function withArgv(args: string[], fn: () => Promise<void>): Promise<void> 
   } finally {
     process.argv = real;
   }
-}
-
-interface ExitCapture {
-  code: number | undefined;
-  err: string;
-}
-
-/**
- * Runs `fn` with process.exit stubbed. The CLI treats exit as terminal, so the stub
- * throws a sentinel to stop execution the way a real exit would.
- */
-async function captureExit(fn: () => Promise<void>): Promise<ExitCapture> {
-  const sentinel = Symbol('exit');
-  const realExit = process.exit;
-  const realErr = process.stderr.write;
-  let code: number | undefined;
-  let err = '';
-
-  process.exit = ((c?: number) => {
-    code = c;
-    throw sentinel;
-  }) as typeof process.exit;
-  process.stderr.write = ((c: string) => {
-    err += String(c);
-    return true;
-  }) as typeof process.stderr.write;
-
-  try {
-    await fn();
-  } catch (e) {
-    if (e !== sentinel) throw e;
-  } finally {
-    process.exit = realExit;
-    process.stderr.write = realErr;
-  }
-  return { code, err };
 }
 
 let tmpDir: string;
@@ -418,35 +400,32 @@ describe('main — stdin input', () => {
     assert.doesNotThrow(() => JSON.parse(streams.out));
   });
 
-  test('exits 1 when stdin is a terminal and no input was supplied', async () => {
-    const { code, err } = await captureExit(async () => {
-      await withArgv(['--from', 'en', '--to', 'fr', '--config', tmpDir], () =>
+  test('rejects with INVALID_USAGE when stdin is a terminal and no input was supplied', async () => {
+    await assert.rejects(
+      withArgv(['--from', 'en', '--to', 'fr', '--config', tmpDir], () =>
         main({ stdin: fakeStdin([], { isTTY: true }) }),
-      );
-    });
-
-    assert.equal(code, 1);
-    assert.match(err, /No input provided/);
+      ),
+      (err: unknown) =>
+        err instanceof LoquiError && err.code === 'INVALID_USAGE' && /No input provided/.test(err.message),
+    );
   });
 
-  test('exits 1 when stdin is empty', async () => {
-    const { code, err } = await captureExit(async () => {
-      await withArgv(['--from', 'en', '--to', 'fr', '--config', tmpDir], () => main({ stdin: fakeStdin([' \n']) }));
-    });
-
-    assert.equal(code, 1);
-    assert.match(err, /empty input from stdin/);
+  test('rejects with INVALID_USAGE when stdin is empty', async () => {
+    await assert.rejects(
+      withArgv(['--from', 'en', '--to', 'fr', '--config', tmpDir], () => main({ stdin: fakeStdin([' \n']) })),
+      (err: unknown) =>
+        err instanceof LoquiError && err.code === 'INVALID_USAGE' && /empty input from stdin/.test(err.message),
+    );
   });
 });
 
 describe('runInit', () => {
   test('refuses to run outside an interactive terminal', async () => {
-    const { code, err } = await captureExit(async () => {
-      await runInit({ input: fakeStdin([]), output: sink(), cwd: tmpDir });
-    });
-
-    assert.equal(code, 1);
-    assert.match(err, /interactive terminal/);
+    await assert.rejects(
+      runInit({ input: fakeStdin([]), output: sink(), cwd: tmpDir }),
+      (err: unknown) =>
+        err instanceof LoquiError && err.code === 'INVALID_USAGE' && /interactive terminal/.test(err.message),
+    );
   });
 
   test('writes a config from the answers given', async () => {
@@ -479,17 +458,17 @@ describe('runInit', () => {
     assert.ok(!('context' in written), 'an empty context should not be written');
   });
 
-  test('rejects an unknown engine with exit 1', async () => {
+  test('rejects an unknown engine with INVALID_USAGE and releases the terminal first', async () => {
     const initDir = path.join(tmpDir, 'init-bad-engine');
     fs.mkdirSync(initDir, { recursive: true });
+    const io = wizardIO(['klingon\n']);
 
-    const { code, err } = await captureExit(async () => {
-      const io = wizardIO(['klingon\n']);
-      await runInit({ input: io.input, output: io.output, cwd: initDir });
-    });
+    await assert.rejects(
+      runInit({ input: io.input, output: io.output, cwd: initDir }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && /Unknown engine/.test(err.message),
+    );
 
-    assert.equal(code, 1);
-    assert.match(err, /Unknown engine/);
+    assert.ok(io.input.isPaused(), 'readline must be closed, or the process never exits');
   });
 
   test('leaves an existing config alone when the overwrite prompt is declined', async () => {
@@ -550,6 +529,31 @@ describe('parseArgs — unknown and malformed options', () => {
   });
 });
 
+describe('parseArgs — a token that would be silently dropped', () => {
+  const rejects = (token: string) => (err: unknown) =>
+    err instanceof LoquiError && err.code === 'INVALID_USAGE' && err.message.includes(token);
+
+  test('a second positional is rejected, naming it', () => {
+    assert.throws(() => parseArgs(argv('en.json', '--to', 'fr', 'de')), rejects('de'));
+  });
+
+  test('a value flag followed by a boolean flag is rejected rather than eating it', () => {
+    assert.throws(() => parseArgs(argv('--output', '--incremental')), rejects('--output'));
+  });
+
+  test('a value flag followed by another value flag is rejected', () => {
+    assert.throws(() => parseArgs(argv('--from', '--to', 'fr')), rejects('--from'));
+  });
+
+  test('a value that looks like a flag but is not one stays legal', () => {
+    assert.equal(parseArgs(argv('--context', '--not-a-flag')).context, '--not-a-flag');
+  });
+
+  test('the = form takes a known flag name as a plain value', () => {
+    assert.equal(parseArgs(argv('--output=--incremental')).output, '--incremental');
+  });
+});
+
 describe('parseArgs — the --flag=value form', () => {
   test('reads a value attached with =', () => {
     const args = parseArgs(argv('--from=en', '--to=fr,de'));
@@ -567,6 +571,18 @@ describe('parseArgs — the --flag=value form', () => {
 
   test('a value starting with a dash is still consumed in the spaced form', () => {
     assert.equal(parseArgs(argv('--context', '--not-a-flag')).context, '--not-a-flag');
+  });
+});
+
+describe('main — help text', () => {
+  test('the exit-code table matches what the codes now cover', async () => {
+    const streams = await captureStreams(async (stdout) => {
+      await withArgv(['--help'], () => main({ stdout }));
+    });
+
+    assert.match(streams.out, /4 +TIMEOUT +— request timed out\n/);
+    assert.match(streams.out, /7 +PARSE_ERROR +— a response, the input, or a file on disk is not valid JSON\n/);
+    assert.match(streams.out, /11 +INVALID_USAGE +— invalid command-line usage\n?/);
   });
 });
 

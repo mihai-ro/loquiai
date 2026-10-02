@@ -14,8 +14,14 @@ Ship both ESM (`.js`) and CommonJS (`.cjs`) bundles via the `exports` field in p
   "type": "module",
   "exports": {
     ".": {
-      "import": "./dist/lib.js",
-      "require": "./dist/lib.cjs"
+      "import": {
+        "types": "./dist/lib.d.ts",
+        "default": "./dist/lib.js"
+      },
+      "require": {
+        "types": "./dist/cjs/lib.d.ts",
+        "default": "./dist/lib.cjs"
+      }
     }
   }
 }

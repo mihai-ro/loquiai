@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
  */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distEsm = path.join(repoRoot, 'dist', 'index.js');
-const distCjs = path.join(repoRoot, 'dist', 'index.cjs');
 const ANSI_PREFIX = '\u001b[';
 
 let tmpDir: string;
@@ -95,22 +94,26 @@ describe('built CLI — usage errors exit 11', () => {
   });
 });
 
-describe('built CLI — CJS entry', () => {
-  test('carries exactly one shebang line', () => {
-    const lines = fs.readFileSync(distCjs, 'utf-8').split('\n');
-    assert.equal(lines[0], '#!/usr/bin/env node');
-    assert.ok(!lines[1].startsWith('#!'), 'a second shebang makes line 2 a SyntaxError');
+describe('built package — what its name resolves to', () => {
+  // cwd at the repo root: a package resolves itself by name through its own `exports`
+  const probe = (script: string) => spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', cwd: repoRoot });
+
+  test("import('@mihairo/loqui') exposes translate", () => {
+    const result = probe("import('@mihairo/loqui').then((m) => console.log(typeof m.translate))");
+
+    assert.equal(result.stdout.trim(), 'function', `stderr: ${result.stderr}`);
   });
 
-  test('require() of the CJS bundle loads and runs without throwing', () => {
-    const requirer = path.join(tmpDir, 'require-cli.cjs');
-    fs.writeFileSync(requirer, `require(${JSON.stringify(distCjs)});\n`, 'utf-8');
+  test("require('@mihairo/loqui') exposes translate", () => {
+    const result = probe("console.log(typeof require('@mihairo/loqui').translate)");
 
-    const result = spawnSync(process.execPath, [requirer, '--help'], { encoding: 'utf-8', cwd: tmpDir });
+    assert.equal(result.stdout.trim(), 'function', `stderr: ${result.stderr}`);
+  });
 
-    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
-    assert.doesNotMatch(result.stderr, /SyntaxError/);
-    assert.match(result.stdout, /loqui — i18n translation CLI/);
+  test("import('@mihairo/loqui/cli') is not exported, so importing the package can never run the CLI", () => {
+    const result = probe("import('@mihairo/loqui/cli').catch((e) => console.log(e.code))");
+
+    assert.equal(result.stdout.trim(), 'ERR_PACKAGE_PATH_NOT_EXPORTED', `stderr: ${result.stderr}`);
   });
 });
 

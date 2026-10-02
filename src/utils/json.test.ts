@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, test } from 'node:test';
-import { deepSortKeys, flatten, unflatten, writeJson } from './json.js';
+import { LoquiError } from '../errors.js';
+import { deepSortKeys, flatten, readJson, unflatten, withStrings, writeJson } from './json.js';
 
 /** unflatten builds null-prototype containers, so deepEqual has to be the loose one. */
 function roundTrip(original: Record<string, unknown>): void {
@@ -188,11 +189,102 @@ describe('flatten / unflatten roundtrip', () => {
   });
 });
 
+describe('withStrings', () => {
+  test('a null in the target file does not replace a string the source now defines', () => {
+    const doc = withStrings(flatten({ title: 'Hello' }), { title: 'Bonjour' }, flatten({ title: null }));
+
+    assertLoose.deepEqual(unflatten(doc), { title: 'Bonjour' });
+  });
+
+  test('a number in the target file does not come back where the source holds a string', () => {
+    const doc = withStrings(flatten({ count: 'Many' }), { count: 'Beaucoup' }, flatten({ count: 3 }));
+
+    assertLoose.deepEqual(unflatten(doc), { count: 'Beaucoup' });
+  });
+
+  test('an untranslated source string is left absent, not filled from a stale target leaf', () => {
+    const doc = withStrings(flatten({ title: 'Hello' }), {}, flatten({ title: null }));
+
+    assertLoose.deepEqual(unflatten(doc), {});
+  });
+
+  test('still carries a target value at a path the source does not define', () => {
+    const doc = withStrings(flatten({ title: 'Hello' }), { title: 'Bonjour' }, flatten({ extra: null }));
+
+    assertLoose.deepEqual(unflatten(doc), { title: 'Bonjour', extra: null });
+  });
+});
+
+describe('keys that name Object.prototype members', () => {
+  test('roundtrip like any other key', () => {
+    roundTrip({ status: { prototype: 'P', constructor: 'C', toString: 'T', valueOf: 'V', toJSON: 'J', live: 'L' } });
+  });
+
+  test('a __proto__ key is never flattened, so it is never sent to an engine', () => {
+    const source = JSON.parse('{"__proto__":{"polluted":"yes"},"nested":{"__proto__":"x","ok":"fine"},"top":"y"}');
+
+    const { strings } = flatten(source);
+
+    assert.deepEqual(Object.keys(strings).sort(), ['nested.ok', 'top']);
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
+  });
+
+  test('a __proto__ key does not survive serialization or reach Object.prototype', () => {
+    const source = JSON.parse('{"__proto__":{"polluted":"yes"},"top":"y"}');
+
+    const out = deepSortKeys(unflatten(withStrings(flatten(source), flatten(source).strings)));
+
+    assert.deepEqual(Object.keys(out), ['top']);
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
+  });
+});
+
 describe('deepSortKeys', () => {
   test('sorts keys alphabetically at every level', () => {
     const result = deepSortKeys({ z: '1', a: '2', m: { q: '3', b: '4' } });
     assert.deepEqual(Object.keys(result), ['a', 'm', 'z']);
     assert.deepEqual(Object.keys(result.m as object), ['b', 'q']);
+  });
+});
+
+describe('readJson', () => {
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'loqui-readjson-'));
+
+  test('returns an empty object for a file that does not exist', () => {
+    const dir = tmp();
+    try {
+      assert.deepEqual(readJson(path.join(dir, 'missing.json')), {});
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('throws PARSE_ERROR naming the path for a file that is not JSON', () => {
+    const dir = tmp();
+    const file = path.join(dir, 'fr.json');
+    fs.writeFileSync(file, '<<<<<<< HEAD\n{"a":"b"}\n=======\n', 'utf-8');
+    try {
+      assert.throws(
+        () => readJson(file),
+        (err: unknown) => err instanceof LoquiError && err.code === 'PARSE_ERROR' && err.message.includes(file),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('lets a read failure other than a missing file propagate as it is', () => {
+    const dir = tmp();
+    try {
+      // a directory where a file should be: EISDIR, not ENOENT
+      assert.throws(
+        () => readJson(dir),
+        (err: unknown) =>
+          err instanceof Error && !(err instanceof LoquiError) && 'code' in err && err.code === 'EISDIR',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

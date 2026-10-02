@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { LoquiError } from '../errors.js';
 import type { FlatDocument, FlatTranslations } from '../types.js';
 
 /**
@@ -16,6 +17,7 @@ import type { FlatDocument, FlatTranslations } from '../types.js';
 export function flatten(obj: Record<string, unknown>): FlatDocument {
   const doc: FlatDocument = { strings: {}, values: {}, arrayPaths: [] };
   for (const [key, value] of Object.entries(obj)) {
+    if (key === UNSAFE_KEY) continue;
     flattenValue(escapeSegment(key), value, doc);
   }
   return doc;
@@ -77,6 +79,7 @@ function flattenValue(flatKey: string, value: unknown, doc: FlatDocument): void 
       return;
     }
     for (const [key, child] of entries) {
+      if (key === UNSAFE_KEY) continue;
       flattenValue(`${flatKey}.${escapeSegment(key)}`, child, doc);
     }
     return;
@@ -87,11 +90,16 @@ function flattenValue(flatKey: string, value: unknown, doc: FlatDocument): void 
 }
 
 /**
+ * The only key that is not plain data. `JSON.parse` yields it as an own property, but
+ * assigning it onto an ordinary object rewrites that object's prototype. Every other
+ * Object.prototype name is just a key, because containers here are null-prototype.
+ */
+const UNSAFE_KEY = '__proto__';
+
+/**
  * unflattens dot-notation keys back into a nested document.
  * { A: { B: "val" } } ← strings: { "A.B": "val" }
  */
-const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', 'toJSON']);
-
 export function unflatten(doc: FlatDocument): Record<string, unknown> {
   const arrays = new Set(doc.arrayPaths);
   const result: Record<string, unknown> = Object.create(null);
@@ -107,7 +115,7 @@ export function unflatten(doc: FlatDocument): Record<string, unknown> {
 
   for (const [flatKey, value] of entries) {
     const parts = splitFlatKey(flatKey);
-    if (parts.some((p) => UNSAFE_KEYS.has(p))) continue;
+    if (parts.includes(UNSAFE_KEY)) continue;
 
     let cursor: Record<string, unknown> = result;
     let prefix = '';
@@ -134,9 +142,17 @@ export function unflatten(doc: FlatDocument): Record<string, unknown> {
  * `base` supplies whatever the existing target file had that the source does not.
  */
 export function withStrings(source: FlatDocument, strings: FlatTranslations, base?: FlatDocument): FlatDocument {
+  // A leaf the target file kept from an older source shape (a null, a number) must not
+  // outlive the string the source now defines there: unflatten writes values after
+  // strings at the same path, so the stale leaf would replace the translation.
+  const baseValues = Object.fromEntries(
+    Object.entries(base?.values ?? {}).filter(
+      ([key]) => !Object.hasOwn(strings, key) && !Object.hasOwn(source.strings, key),
+    ),
+  );
   return {
     strings,
-    values: { ...base?.values, ...source.values },
+    values: { ...baseValues, ...source.values },
     arrayPaths: [...new Set([...(base?.arrayPaths ?? []), ...source.arrayPaths])],
   };
 }
@@ -159,12 +175,30 @@ function sortValue(val: unknown): unknown {
   return val;
 }
 
-/** reads and parses a JSON file. Returns empty object if file doesn't exist. */
+/**
+ * reads and parses a JSON file. A file that does not exist reads as an empty object; one
+ * that cannot be read or parsed is an error, because reading it as empty means the caller
+ * rewrites it — a target file with a merge-conflict marker would be translated from
+ * scratch and overwritten.
+ */
 export function readJson(filePath: string): Record<string, unknown> {
+  let raw: string;
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch {
-    return {};
+    raw = fs.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return {};
+    throw err;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new LoquiError(
+      'PARSE_ERROR',
+      `Could not parse ${filePath} as JSON: ${err instanceof Error ? err.message : err}`,
+      {
+        cause: err,
+      },
+    );
   }
 }
 

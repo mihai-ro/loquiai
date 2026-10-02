@@ -63,6 +63,14 @@
     "loqui.schema.json",
     "README.md"
   ],
+  "peerDependencies": {
+    "@types/node": ">=22"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
     "@types/node": "^22.0.0",

@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
+import { hashValue } from './hasher.js';
 import {
   loadTranslationMemory,
   lookupTranslationMemory,
+  memoryKey,
   saveTranslationMemory,
   updateTranslationMemory,
 } from './translation-memory.js';
@@ -24,10 +26,74 @@ describe('translationMemory', () => {
   });
 
   it('loadTranslationMemory loads existing translation memory', () => {
-    const data = { abc123: { fr: 'bonjour', de: 'hallo' } };
+    const data = { [memoryKey('hello')]: { fr: 'bonjour', de: 'hallo' } };
     fs.writeFileSync(tmPath, JSON.stringify(data, null, 2));
     const tm = loadTranslationMemory(tmPath);
     assert.deepStrictEqual(tm, data);
+  });
+
+  it('loadTranslationMemory drops entries in the old key format and warns once with the path and count', () => {
+    const kept = memoryKey('hello');
+    fs.writeFileSync(
+      tmPath,
+      JSON.stringify({ [kept]: { fr: 'bonjour' }, '811c9dc5': { fr: 'old one' }, e8d4a2b1: { fr: 'old two' } }),
+    );
+    const warnings: string[] = [];
+    const realWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string) => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let tm: ReturnType<typeof loadTranslationMemory>;
+    try {
+      tm = loadTranslationMemory(tmPath);
+    } finally {
+      process.stderr.write = realWrite;
+    }
+
+    assert.deepStrictEqual(tm, { [kept]: { fr: 'bonjour' } });
+    assert.strictEqual(warnings.length, 1, 'one warning, not one per entry');
+    assert.ok(warnings[0].includes(tmPath) && warnings[0].includes('2'), warnings[0]);
+  });
+
+  it('loadTranslationMemory stays quiet when every key is current', () => {
+    fs.writeFileSync(tmPath, JSON.stringify({ [memoryKey('hello')]: { fr: 'bonjour' } }));
+    const realWrite = process.stderr.write;
+    let wrote = false;
+    process.stderr.write = (() => {
+      wrote = true;
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      loadTranslationMemory(tmPath);
+    } finally {
+      process.stderr.write = realWrite;
+    }
+
+    assert.strictEqual(wrote, false);
+  });
+
+  it('memoryKey is 32 lowercase hex characters and stable', () => {
+    assert.match(memoryKey('hello'), /^[0-9a-f]{32}$/);
+    assert.strictEqual(memoryKey('hello'), memoryKey('hello'));
+    assert.notStrictEqual(memoryKey('hello'), memoryKey('Hello'));
+  });
+
+  it('memoryKey tells apart two strings whose FNV hashes collide', () => {
+    const seen = new Map<string, string>();
+    let pair: [string, string] | undefined;
+    for (let i = 0; !pair && i < 2_000_000; i++) {
+      const candidate = `string ${i}`;
+      const hash = hashValue(candidate);
+      const earlier = seen.get(hash);
+      if (earlier !== undefined) pair = [earlier, candidate];
+      else seen.set(hash, candidate);
+    }
+
+    assert.ok(pair, 'a 32-bit hash collides within a couple of million strings');
+    const [a, b] = pair;
+    assert.strictEqual(hashValue(a), hashValue(b));
+    assert.notStrictEqual(memoryKey(a), memoryKey(b));
   });
 
   it('saveTranslationMemory writes to file', () => {
@@ -74,7 +140,7 @@ describe('translationMemory', () => {
   });
 
   it('load/save roundtrip preserves data', () => {
-    const original = { abc123: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
+    const original = { [memoryKey('hello')]: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
     saveTranslationMemory(tmPath, original);
     const loaded = loadTranslationMemory(tmPath);
     assert.deepStrictEqual(loaded, original);

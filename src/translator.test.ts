@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { LoquiError } from './errors.js';
 import { hashValue } from './hasher.js';
-import { ConcurrencyPool, chunkTranslations, translateJson } from './translator.js';
+import { memoryKey } from './translation-memory.js';
+import { translateJson } from './translator.js';
 import {
   CONFIG_DEFAULTS,
   type EngineAdapter,
@@ -222,163 +223,6 @@ describe('translateJson — hash generation', () => {
   });
 });
 
-describe('ConcurrencyPool — AIMD', () => {
-  test('runs all tasks and respects the initial window', async () => {
-    const pool = new ConcurrencyPool(2);
-    let maxConcurrent = 0;
-    let current = 0;
-
-    const tasks = Array.from({ length: 6 }, () => async () => {
-      current++;
-      maxConcurrent = Math.max(maxConcurrent, current);
-      await new Promise<void>((r) => setTimeout(r, 5));
-      current--;
-    });
-
-    await pool.run(tasks);
-    assert.ok(maxConcurrent <= 2, `maxConcurrent was ${maxConcurrent}, expected <= 2`);
-  });
-
-  test('onRateLimited halves the window (floor 1)', () => {
-    const pool = new ConcurrencyPool(8);
-    pool.onRateLimited();
-    assert.equal(pool.current, 4);
-    pool.onRateLimited();
-    assert.equal(pool.current, 2);
-    pool.onRateLimited();
-    assert.equal(pool.current, 1);
-    pool.onRateLimited();
-    assert.equal(pool.current, 1); // floor at 1
-  });
-
-  test('onSuccess ramps up after N consecutive successes', () => {
-    const pool = new ConcurrencyPool(8);
-    pool.onRateLimited(); // window = 4
-    for (let i = 0; i < 10; i++) pool.onSuccess();
-    assert.equal(pool.current, 5);
-    for (let i = 0; i < 10; i++) pool.onSuccess();
-    assert.equal(pool.current, 6);
-  });
-
-  test('window never exceeds the configured max', () => {
-    const pool = new ConcurrencyPool(4);
-    for (let i = 0; i < 200; i++) pool.onSuccess();
-    assert.equal(pool.current, 4);
-  });
-
-  test('rate limit signal is called on 429 via engine integration', async () => {
-    let rateLimitCalls = 0;
-    const engine: EngineAdapter = {
-      setRateLimitSignal(fn) {
-        // simulate 429 immediately on first chunk
-        fn();
-        rateLimitCalls++;
-      },
-      async translateChunk(chunk, targetLocales) {
-        const result: Record<string, TranslationResult> = {};
-        for (const locale of targetLocales) {
-          result[locale] = { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'translated'])) };
-        }
-        return result;
-      },
-    };
-
-    await translateJson({
-      sourceFlat: { hello: 'world' },
-      from: 'en',
-      to: ['fr'],
-      namespace: 'test',
-      config,
-      engine,
-    });
-
-    assert.equal(rateLimitCalls, 1);
-  });
-
-  test('run respects window shrink mid-flight', async () => {
-    const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
-    const pool = new ConcurrencyPool(4);
-    let inflight = 0;
-    let maxAfterShrink = 0;
-    let shrunk = false;
-    const resolvers: Array<() => void> = [];
-
-    const makeTask = () => () =>
-      new Promise<void>((resolve) => {
-        inflight++;
-        if (shrunk) maxAfterShrink = Math.max(maxAfterShrink, inflight);
-        resolvers.push(() => {
-          inflight--;
-          resolve();
-        });
-      });
-
-    const tasks = Array.from({ length: 8 }, makeTask);
-    const runPromise = pool.run(tasks);
-
-    // pool dispatches 4 synchronously before hitting the first await
-    assert.equal(inflight, 4);
-
-    shrunk = true;
-    pool.onRateLimited(); // window 4 → 2
-
-    // drain all 8 tasks one at a time; resolvers array stays populated as pool dispatches
-    for (let i = 0; i < 8; i++) {
-      const resolve = resolvers.shift();
-      assert.ok(resolve, `expected resolver at step ${i}`);
-      resolve();
-      await tick();
-    }
-    await runPromise;
-
-    assert.ok(maxAfterShrink <= 2, `max concurrency after rate limit: ${maxAfterShrink}, expected <= 2`);
-  });
-
-  test('run throws AggregateError when tasks fail', async () => {
-    const pool = new ConcurrencyPool(2);
-    const boom = new Error('task exploded');
-    const tasks = [
-      async () => {
-        throw boom;
-      },
-      async () => {},
-      async () => {
-        throw new Error('another failure');
-      },
-    ];
-
-    await assert.rejects(
-      () => pool.run(tasks),
-      (err: unknown) => {
-        assert.ok(err instanceof AggregateError);
-        assert.equal(err.errors.length, 2);
-        assert.equal(err.errors[0], boom);
-        return true;
-      },
-    );
-  });
-
-  test('run does not call onSuccess for failed tasks', async () => {
-    const pool = new ConcurrencyPool(4);
-    const successCount = { value: 0 };
-    const origOnSuccess = pool.onSuccess.bind(pool);
-    pool.onSuccess = () => {
-      successCount.value++;
-      origOnSuccess();
-    };
-
-    const tasks = [
-      async () => {},
-      async () => {
-        throw new Error('fail');
-      },
-      async () => {},
-    ];
-    await assert.rejects(() => pool.run(tasks));
-    assert.equal(successCount.value, 2);
-  });
-});
-
 describe('translateJson — chunk failure handling', () => {
   /** Fails only for the keys named, so a run can be made to half-succeed. */
   function flakyEngine(failOn: string[]): EngineAdapter {
@@ -521,7 +365,7 @@ describe('translateJson — a changed key that did not land', () => {
   test('does not write the stale value to translation memory under the new hash', async () => {
     const { updatedTranslationMemory } = await runWithFailingChunk();
 
-    assert.equal(updatedTranslationMemory[hashValue(newSource)], undefined);
+    assert.equal(updatedTranslationMemory[memoryKey(newSource)], undefined);
   });
 
   test('sends the key to the engine again on the next run', async () => {
@@ -574,11 +418,11 @@ describe('translateJson — a changed key that did not land', () => {
 
     assert.equal(translations.de.changed, 'ALT ${name}', 'precondition: the de result was rejected');
     assert.equal(updatedHashStore.changed, oldHash);
-    assert.deepEqual(updatedTranslationMemory[hashValue('Hello ${name}')], { fr: 'Hello ${name}' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Hello ${name}')], { fr: 'Hello ${name}' });
   });
 
   describe('with one locale served from translation memory', () => {
-    const memoryHash = hashValue(newSource);
+    const memoryHash = memoryKey(newSource);
     const translationMemory = () => ({ [memoryHash]: { fr: 'MEMOIRE' } });
     const existingLocales = { fr: { changed: 'ANCIENNE' }, de: { changed: 'ALTE' } };
 
@@ -820,6 +664,285 @@ describe('translateJson — empty source values', () => {
   });
 });
 
+describe('translateJson — fail fast on a bad key', () => {
+  // each value is long enough to fill a chunk on its own at the smallest legal splitToken
+  const LONG = 'x'.repeat(2000);
+  const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`k${i}`, `${LONG}${i}`]));
+  const oneKeyPerChunk = { ...config, splitToken: 500, concurrency: 8 };
+
+  test('an engine that rejects every call with AUTH is called at most once per worker', async () => {
+    let calls = 0;
+    const engine: EngineAdapter = {
+      async translateChunk() {
+        calls++;
+        throw new LoquiError('AUTH', 'invalid key');
+      },
+    };
+
+    const { failure } = await translateJson({
+      sourceFlat: fifty,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: oneKeyPerChunk,
+      engine,
+    });
+
+    assert.ok(calls <= 8, `${calls} calls for 50 chunks at concurrency 8`);
+    assert.equal(failure?.code, 'AUTH');
+  });
+
+  test('a failure that is not AUTH does not stop the other chunks', async () => {
+    let calls = 0;
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        calls++;
+        if ('k0' in chunk.keys) throw new Error('API exploded');
+        return Object.fromEntries(targetLocales.map((l) => [l, { keys: { ...chunk.keys } }]));
+      },
+    };
+
+    const { stats } = await translateJson({
+      sourceFlat: fifty,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: oneKeyPerChunk,
+      engine,
+    });
+
+    assert.equal(calls, 50);
+    assert.equal(stats.failedChunks, 1);
+  });
+
+  test('an AUTH failure after some chunks landed still reports AUTH and keeps what landed', async () => {
+    let calls = 0;
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        calls++;
+        if (calls > 1) throw new LoquiError('AUTH', 'key revoked');
+        return Object.fromEntries(
+          targetLocales.map((l) => [l, { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'DONE'])) }]),
+        );
+      },
+    };
+
+    const { failure, translations } = await translateJson({
+      sourceFlat: fifty,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...oneKeyPerChunk, concurrency: 1 },
+      engine,
+    });
+
+    assert.equal(calls, 2, 'nothing starts after the AUTH rejection');
+    assert.equal(failure?.code, 'AUTH');
+    assert.equal(translations.fr.k0, 'DONE');
+  });
+});
+
+describe('translateJson — a truncated chunk is split', () => {
+  const four = { k0: 'Zero', k1: 'One', k2: 'Two', k3: 'Three' };
+  const truncated = () => new LoquiError('TRUNCATED', 'cut off at the output token limit');
+
+  /** Truncates any call over `limit` keys; otherwise uppercases. */
+  function limitedEngine(limit: number, calls: string[][] = []): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        const keys = Object.keys(chunk.keys);
+        calls.push(keys);
+        if (keys.length > limit) throw truncated();
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            { keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])) },
+          ]),
+        );
+      },
+    };
+  }
+
+  test('a chunk the engine cuts off ends with every key translated', async () => {
+    const calls: string[][] = [];
+
+    const { translations, failure } = await translateJson({
+      sourceFlat: four,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: limitedEngine(2, calls),
+    });
+
+    assert.equal(failure, undefined);
+    assert.deepEqual(translations.fr, { k0: 'ZERO', k1: 'ONE', k2: 'TWO', k3: 'THREE' });
+    assert.deepEqual(calls, [
+      ['k0', 'k1', 'k2', 'k3'],
+      ['k0', 'k1'],
+      ['k2', 'k3'],
+    ]);
+  });
+
+  test('halves are split again until they fit', async () => {
+    const calls: string[][] = [];
+
+    const { translations, failure } = await translateJson({
+      sourceFlat: four,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: limitedEngine(1, calls),
+    });
+
+    assert.equal(failure, undefined);
+    assert.equal(Object.keys(translations.fr).length, 4);
+    assert.ok(calls.every((c) => c.length <= 2 || c.length === 4));
+  });
+
+  test('a single key that is cut off fails with TRUNCATED', async () => {
+    const { failure, translations } = await translateJson({
+      sourceFlat: { only: 'One value' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: limitedEngine(0),
+    });
+
+    assert.equal(failure?.code, 'TRUNCATED');
+    assert.equal(translations.fr.only, undefined);
+  });
+
+  test('what one half delivered stays delivered when the other half fails', async () => {
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        const keys = Object.keys(chunk.keys);
+        if (keys.length > 2) throw truncated();
+        if (keys.includes('k3')) throw new Error('API exploded');
+        return Object.fromEntries(
+          targetLocales.map((l) => [l, { keys: Object.fromEntries(keys.map((k) => [k, 'DONE'])) }]),
+        );
+      },
+    };
+
+    const { translations, failure } = await translateJson({
+      sourceFlat: four,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine,
+    });
+
+    assert.equal(translations.fr.k0, 'DONE');
+    assert.equal(translations.fr.k1, 'DONE');
+    assert.equal(translations.fr.k3, undefined);
+    assert.equal(failure?.code, 'CHUNK_FAILED');
+  });
+
+  test('when both halves fail, neither error is lost', async () => {
+    const engine: EngineAdapter = {
+      async translateChunk(chunk) {
+        const keys = Object.keys(chunk.keys);
+        if (keys.length > 2) throw truncated();
+        throw new Error(`exploded on ${keys.join('+')}`);
+      },
+    };
+
+    const { stats } = await translateJson({
+      sourceFlat: four,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine,
+    });
+
+    assert.ok(stats.warnings.some((w) => w.includes('exploded on k0+k1')));
+    assert.ok(
+      stats.warnings.some((w) => w.includes('exploded on k2+k3')),
+      'the second half failed too',
+    );
+  });
+
+  describe('the cost of splitting', () => {
+    // two keys per chunk at splitToken 500; an engine that fits one key per call splits every chunk
+    const wide = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`w${i}`, `${'word '.repeat(80)}${i}`]));
+    const splitNotes = (warnings: string[]) => warnings.filter((w) => /re-sent in halves/.test(w));
+
+    test('is reported once per run, however many chunks split', async () => {
+      const { stats } = await translateJson({
+        sourceFlat: wide,
+        from: 'en',
+        to: ['fr'],
+        namespace: 'test',
+        config: { ...config, splitToken: 500 },
+        engine: limitedEngine(1),
+      });
+
+      assert.equal(splitNotes(stats.warnings).length, 1);
+      assert.ok(splitNotes(stats.warnings)[0].includes('splitToken'), 'the warning names what avoids the cost');
+    });
+
+    test('is not reported when nothing was cut off', async () => {
+      const { stats } = await translateJson({
+        sourceFlat: four,
+        from: 'en',
+        to: ['fr'],
+        namespace: 'test',
+        config,
+        engine: limitedEngine(10),
+      });
+
+      assert.equal(splitNotes(stats.warnings).length, 0);
+    });
+  });
+
+  test('a value skipped by ICU masking is warned about once, however often the chunk splits', async () => {
+    const { stats } = await translateJson({
+      sourceFlat: { ...four, bad: '{n, plural, one {# item} other {# items' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine: limitedEngine(1),
+    });
+
+    assert.equal(stats.warnings.filter((w) => w.includes('"bad"')).length, 1);
+  });
+
+  test('a review pass that is cut off splits the chunk too', async () => {
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            { keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])) },
+          ]),
+        );
+      },
+      async reviewChunk(chunk, initial) {
+        if (Object.keys(chunk.keys).length > 2) throw truncated();
+        return initial;
+      },
+    };
+
+    const { translations, failure } = await translateJson({
+      sourceFlat: four,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config: { ...config, review: true },
+      engine,
+    });
+
+    assert.equal(failure, undefined);
+    assert.equal(Object.keys(translations.fr).length, 4);
+  });
+});
+
 describe('translateJson — failure code collapsing', () => {
   /** Every chunk fails the same way, the way a bad API key behaves. */
   function alwaysFails(err: Error): EngineAdapter {
@@ -846,7 +969,8 @@ describe('translateJson — failure code collapsing', () => {
   });
 
   test('a mixed failure stays CHUNK_FAILED', async () => {
-    const errors = [new LoquiError('AUTH', 'bad key'), new LoquiError('RATE_LIMIT', 'slow down')];
+    // AUTH goes second: an AUTH rejection stops the pool, so nothing could follow it
+    const errors = [new LoquiError('RATE_LIMIT', 'slow down'), new LoquiError('AUTH', 'bad key')];
     let call = 0;
     const engine: EngineAdapter = {
       async translateChunk() {
@@ -871,7 +995,8 @@ describe('translateJson — failure code collapsing', () => {
     let call = 0;
     const engine: EngineAdapter = {
       async translateChunk(chunk, targetLocales) {
-        if (call++ === 0) throw new LoquiError('AUTH', 'bad key');
+        // not AUTH: an AUTH rejection stops the pool, so a later chunk could not succeed
+        if (call++ === 0) throw new LoquiError('RATE_LIMIT', 'slow down');
         const result: Record<string, TranslationResult> = {};
         for (const locale of targetLocales) {
           result[locale] = { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'ok'])) };
@@ -924,7 +1049,7 @@ describe('translateJson — translation memory hit rate', () => {
   test('a partial memory hit serves the cached locale and sends only the rest', async () => {
     const sourceFlat = { alpha: 'Alpha' };
     // fr is cached, de is not
-    const translationMemory = { [hashValue('Alpha')]: { fr: 'FROM-TM-fr' } };
+    const translationMemory = { [memoryKey('Alpha')]: { fr: 'FROM-TM-fr' } };
     const asked: string[][] = [];
 
     const engine: EngineAdapter = {
@@ -970,7 +1095,7 @@ describe('translateJson — translation memory hit rate', () => {
       to: ['fr', 'de'],
       namespace: 'test',
       config,
-      translationMemory: { [hashValue('Alpha')]: { fr: 'TM-fr', de: 'TM-de' } },
+      translationMemory: { [memoryKey('Alpha')]: { fr: 'TM-fr', de: 'TM-de' } },
       engine,
     });
 
@@ -1256,61 +1381,253 @@ describe('translateJson — glossary enforcement', () => {
   });
 });
 
-describe('chunkTranslations — key-count bound', () => {
-  function makeFlat(n: number): Record<string, string> {
-    return Object.fromEntries(Array.from({ length: n }, (_, i) => [`key${i}`, 'value']));
+describe('translateJson — each key goes only to the locales that need it', () => {
+  interface Call {
+    locales: string[];
+    keys: string[];
   }
 
-  test('single locale: allows up to 90 keys per chunk', () => {
-    const flat = makeFlat(90);
-    const chunks = chunkTranslations(flat, 999_999, 1);
-    assert.equal(chunks.length, 1);
-    assert.equal(Object.keys(chunks[0].keys).length, 90);
+  function recordingEngine(calls: Call[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        calls.push({ locales: [...targetLocales], keys: Object.keys(chunk.keys) });
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, `${locale}:${v}`])),
+          };
+        }
+        return result;
+      },
+    };
+  }
+
+  const valuesAsked = (calls: Call[]) => calls.reduce((sum, c) => sum + c.keys.length * c.locales.length, 0);
+
+  // ja has nothing; fr has everything but k0
+  const sourceFlat = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, `Text ${i}`]));
+  const frExisting = Object.fromEntries(Object.entries(sourceFlat).filter(([k]) => k !== 'k0'));
+
+  test('asks for each value once per locale that needs it, not once per active locale', async () => {
+    const calls: Call[] = [];
+
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['ja', 'fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: frExisting },
+      engine: recordingEngine(calls),
+    });
+
+    assert.equal(valuesAsked(calls), 21, 'k0 for ja and fr, the other 19 for ja only');
+    assert.equal(Object.keys(translations.ja).length, 20);
+    assert.equal(translations.fr.k0, 'fr:Text 0');
+    assert.equal(translations.fr.k1, 'Text 1', 'fr kept the value it already had');
   });
 
-  test('single locale: splits at 91 keys', () => {
-    const flat = makeFlat(91);
-    const chunks = chunkTranslations(flat, 999_999, 1);
-    assert.equal(chunks.length, 2);
+  test('calls the engine with the locales of the group, in `to` order', async () => {
+    const calls: Call[] = [];
+
+    await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['ja', 'fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: frExisting },
+      engine: recordingEngine(calls),
+    });
+
+    const byLocales = calls.map((c) => `${c.locales.join('+')}:${c.keys.length}`).sort();
+    assert.deepEqual(byLocales, ['ja+fr:1', 'ja:19']);
   });
 
-  test('10 locales: max 9 keys per chunk (floor(90/10))', () => {
-    const flat = makeFlat(10);
-    const chunks = chunkTranslations(flat, 999_999, 10);
-    assert.equal(chunks.length, 2); // 10 keys → ceil(10/9) = 2 chunks
-    assert.ok(Object.keys(chunks[0].keys).length <= 9);
+  test("chunks within a group by that group's own locale count", async () => {
+    const calls: Call[] = [];
+    // 100 keys wanted by one locale and 100 by ten: the cap is 90 values per call
+    const wide = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`w${i}`, `Wide ${i}`]));
+    const locales = ['l0', 'l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7', 'l8', 'l9'];
+
+    await translateJson({
+      sourceFlat: wide,
+      from: 'en',
+      to: locales,
+      namespace: 'test',
+      config,
+      existing: Object.fromEntries(
+        locales.slice(1).map((l) => [
+          l,
+          Object.fromEntries(
+            Object.keys(wide)
+              .slice(0, 50)
+              .map((k) => [k, 'x']),
+          ),
+        ]),
+      ),
+      engine: recordingEngine(calls),
+    });
+
+    assert.ok(
+      calls.every((c) => c.keys.length * c.locales.length <= 90),
+      'no call may exceed the structured-output cap',
+    );
+    assert.equal(valuesAsked(calls), 100 + 50 * 9, 'l0 needs all 100; the other nine need the last 50');
   });
 
-  test('20 locales: max 4 keys per chunk (floor(90/20))', () => {
-    const flat = makeFlat(20);
-    const chunks = chunkTranslations(flat, 999_999, 20);
-    // floor(90/20)=4, so 20 keys → 5 chunks
-    assert.equal(chunks.length, 5);
-    for (const chunk of chunks) {
-      assert.ok(Object.keys(chunk.keys).length <= 4);
+  test('a uniform failure is still reported by its own code when the groups fail together', async () => {
+    const engine: EngineAdapter = {
+      async translateChunk() {
+        throw new LoquiError('AUTH', 'invalid key');
+      },
+    };
+
+    const { failure } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['ja', 'fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: frExisting },
+      engine,
+    });
+
+    assert.equal(failure?.code, 'AUTH', 'two groups, two failed requests: every request failed alike');
+  });
+
+  test('translation memory records what each locale was delivered, key by key', async () => {
+    const { updatedTranslationMemory } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['ja', 'fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: frExisting },
+      translationMemory: {},
+      engine: recordingEngine([]),
+    });
+
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Text 0')], { ja: 'ja:Text 0', fr: 'fr:Text 0' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Text 1')], { ja: 'ja:Text 1' });
+  });
+});
+
+describe('translateJson — what an engine hands back', () => {
+  /** A custom engine may answer with more than it was asked for. */
+  const overreachingEngine: EngineAdapter = {
+    async translateChunk(chunk, targetLocales) {
+      const result: Record<string, TranslationResult> = {};
+      for (const locale of targetLocales) {
+        result[locale] = {
+          keys: {
+            ...Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'TRANSLATED'])),
+            b: 'CLOBBERED',
+            rogue: 'INVENTED',
+          },
+        };
+      }
+      return result;
+    },
+  };
+
+  test('a key that was not sent is neither written nor remembered', async () => {
+    const { translations, updatedTranslationMemory } = await translateJson({
+      sourceFlat: { a: 'A', b: 'B' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      // b is already translated and not requested; only a is sent
+      existing: { fr: { b: 'KEEP' } },
+      translationMemory: {},
+      engine: overreachingEngine,
+    });
+
+    assert.equal(translations.fr.a, 'TRANSLATED');
+    assert.equal(translations.fr.b, 'KEEP', 'an existing value the run did not ask about must survive');
+    assert.ok(!('rogue' in translations.fr), 'an invented key must not reach the output');
+    assert.deepEqual(Object.keys(updatedTranslationMemory), [memoryKey('A')], 'only the delivered key is remembered');
+    assert.deepEqual(updatedTranslationMemory[memoryKey('A')], { fr: 'TRANSLATED' });
+  });
+});
+
+describe('translateJson — translation memory does not confuse strings whose hashes collide', () => {
+  /** Two different strings with the same FNV hash, found by brute force. */
+  function collidingPair(): [string, string] {
+    const seen = new Map<string, string>();
+    for (let i = 0; i < 2_000_000; i++) {
+      const candidate = `string ${i}`;
+      const hash = hashValue(candidate);
+      const earlier = seen.get(hash);
+      if (earlier !== undefined) return [earlier, candidate];
+      seen.set(hash, candidate);
     }
+    throw new Error('no collision found');
+  }
+
+  function recordingEngine(sent: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        sent.push(...Object.values(chunk.keys));
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'FROM-ENGINE'])) },
+          ]),
+        );
+      },
+    };
+  }
+
+  const [first, second] = collidingPair();
+
+  test('a remembered string is served from memory', async () => {
+    const sent: string[] = [];
+
+    const { translations } = await translateJson({
+      sourceFlat: { x: first },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      translationMemory: { [memoryKey(first)]: { fr: 'FROM-MEMORY' } },
+      engine: recordingEngine(sent),
+    });
+
+    assert.equal(translations.fr.x, 'FROM-MEMORY');
+    assert.deepEqual(sent, []);
   });
 
-  test('token limit still splits before key limit', () => {
-    // 2 locales → max 45 keys. But tiny splitToken forces 1 key per chunk.
-    const flat = makeFlat(5);
-    const chunks = chunkTranslations(flat, 1, 2);
-    assert.equal(chunks.length, 5);
+  test("a different string with the same hash is sent to the engine, not served the first one's translation", async () => {
+    const sent: string[] = [];
+
+    const { translations } = await translateJson({
+      sourceFlat: { x: second },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      translationMemory: { [memoryKey(first)]: { fr: 'FROM-MEMORY' } },
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, [second]);
+    assert.equal(translations.fr.x, 'FROM-ENGINE');
   });
 
-  test('single key always produces exactly one chunk regardless of localeCount', () => {
-    const chunks = chunkTranslations({ onlyKey: 'val' }, 999_999, 100);
-    assert.equal(chunks.length, 1);
-    assert.deepEqual(Object.keys(chunks[0].keys), ['onlyKey']);
-  });
+  test('both strings are remembered separately after one run', async () => {
+    const { updatedTranslationMemory } = await translateJson({
+      sourceFlat: { x: first, y: second },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      translationMemory: {},
+      engine: recordingEngine([]),
+    });
 
-  test('each chunk has locales × keys ≤ 90', () => {
-    const localeCount = 7;
-    const flat = makeFlat(50);
-    const chunks = chunkTranslations(flat, 999_999, localeCount);
-    for (const chunk of chunks) {
-      assert.ok(localeCount * Object.keys(chunk.keys).length <= 90);
-    }
+    assert.deepEqual(Object.keys(updatedTranslationMemory).sort(), [memoryKey(first), memoryKey(second)].sort());
   });
 });
 
@@ -1338,7 +1655,7 @@ describe('translateJson — per-locale key isolation', () => {
 
   test('a translation-memory hit is not written to a locale that already had the key', async () => {
     const translationMemory = {
-      [hashValue('Alpha')]: { fr: 'STALE-FROM-TM-fr', de: 'STALE-FROM-TM-de' },
+      [memoryKey('Alpha')]: { fr: 'STALE-FROM-TM-fr', de: 'STALE-FROM-TM-de' },
     };
 
     const { translations } = await translateJson({
@@ -1385,8 +1702,39 @@ describe('translateJson — per-locale key isolation', () => {
       engine: makeEngine((v) => `${v}-translated`),
     });
 
-    const alphaEntry = updatedTranslationMemory[hashValue('Alpha')] ?? {};
+    const alphaEntry = updatedTranslationMemory[memoryKey('Alpha')] ?? {};
     assert.equal(alphaEntry.fr, 'Alpha-translated');
     assert.ok(!('de' in alphaEntry), "de's pre-existing value is not a translation of this source hash");
+  });
+});
+
+describe('translateJson — rate-limit signal', () => {
+  test('rate limit signal is called on 429 via engine integration', async () => {
+    let rateLimitCalls = 0;
+    const engine: EngineAdapter = {
+      setRateLimitSignal(fn) {
+        // simulate 429 immediately on first chunk
+        fn();
+        rateLimitCalls++;
+      },
+      async translateChunk(chunk, targetLocales) {
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'translated'])) };
+        }
+        return result;
+      },
+    };
+
+    await translateJson({
+      sourceFlat: { hello: 'world' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      engine,
+    });
+
+    assert.equal(rateLimitCalls, 1);
   });
 });

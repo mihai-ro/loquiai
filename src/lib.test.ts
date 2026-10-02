@@ -6,6 +6,7 @@ import { after, before, describe, test } from 'node:test';
 import { LoquiError } from './errors.js';
 import { hashValue } from './hasher.js';
 import { translate } from './lib.js';
+import { memoryKey } from './translation-memory.js';
 import { translateJson } from './translator.js';
 import {
   CONFIG_DEFAULTS,
@@ -632,7 +633,7 @@ describe('translate — a partial run keeps what it paid for', () => {
       const dir = nextTmp();
       fs.mkdirSync(dir, { recursive: true });
       const tmFile = path.join(dir, 'tm.json');
-      fs.writeFileSync(tmFile, JSON.stringify({ [hashValue('Hello')]: { fr: 'Bonjour' } }), 'utf-8');
+      fs.writeFileSync(tmFile, JSON.stringify({ [memoryKey('Hello')]: { fr: 'Bonjour' } }), 'utf-8');
       try {
         await translate({
           input: JSON.stringify({ served: 'Hello', sent: 'World' }),

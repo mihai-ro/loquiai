@@ -1,10 +1,9 @@
+import { chunkTranslations, processChunk } from './chunk.js';
+import { ConcurrencyPool } from './concurrency-pool.js';
 import { createEngine } from './engines/factory.js';
-import { STRUCTURED_OUTPUT_MAX_PROPS } from './engines/utils.js';
 import { LoquiError } from './errors.js';
-import { buildGlossaryPromptBlock, findTermsInText, maskTerms } from './glossary.js';
 import { buildUpdatedHashStore, hashValue } from './hasher.js';
-import { IcuMaskError, maskPlaceholders, restorePlaceholders } from './placeholder.js';
-import { lookupTranslationMemory, updateTranslationMemory } from './translation-memory.js';
+import { lookupTranslationMemory, memoryKey, updateTranslationMemory } from './translation-memory.js';
 import type {
   EngineAdapter,
   FlatTranslations,
@@ -12,7 +11,6 @@ import type {
   HashStore,
   LoquiConfig,
   RunStats,
-  TranslationChunk,
   TranslationMemory,
 } from './types.js';
 import { logger } from './utils/logger.js';
@@ -74,11 +72,8 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   // Hashes are source-derived — compute once for all keys, regardless of what needs translating.
   // This ensures the hash file is always up to date even on "nothing to do" runs.
   const currentSourceHashes: HashStore = {};
-  const sourceHashesForTm: Record<string, string> = {};
   for (const [key, value] of Object.entries(sourceFlat)) {
-    const hash = hashValue(value);
-    currentSourceHashes[key] = hash;
-    sourceHashesForTm[key] = hash;
+    currentSourceHashes[key] = hashValue(value);
   }
 
   const workingTargets: Record<string, FlatTranslations> = {};
@@ -133,10 +128,13 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   );
 
   const tmCache: Record<string, Record<string, string>> = {};
+  // Computed once, for the keys that are looked up; the write-back reuses them.
+  const memoryKeys: Record<string, string> = {};
   const keysNeedingTranslation: FlatTranslations = {};
 
   for (const key of allKeysNeeded) {
-    const hash = sourceHashesForTm[key];
+    const hash = memoryKey(sourceFlat[key]);
+    memoryKeys[key] = hash;
     // A locale is active because of some key; that does not make every key its own.
     const localesNeeding = activeLocales.filter((locale) => key in keysToTranslatePerLocale[locale]);
     const cached = lookupTranslationMemory(translationMemory, hash, localesNeeding);
@@ -152,9 +150,8 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     for (const locale of Object.keys(cached)) {
       workingTargets[locale][key] = cached[locale];
       stats.keysTranslated++;
-      // This locale's need for the key is met. Dropping it here keeps the engine
-      // result for the same key — sent for the locales still missing it — from
-      // overwriting the memory hit, and keeps it out of the TM rewrite below.
+      // This locale's need for the key is met. Dropping it here keeps the locale out
+      // of the group the key is sent to, and out of the TM rewrite below.
       delete keysToTranslatePerLocale[locale][key];
     }
   }
@@ -170,9 +167,21 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     };
   }
 
-  const chunks = chunkTranslations(keysNeedingTranslation, config.splitToken, activeLocales.length);
+  // Each key goes only to the locales that still need it. Keys with the same set of
+  // locales share chunks, so a key one locale lacks is not paid for in every other.
+  const groups = new Map<string, { locales: string[]; keys: FlatTranslations }>();
+  for (const [key, value] of Object.entries(keysNeedingTranslation)) {
+    const locales = activeLocales.filter((locale) => key in keysToTranslatePerLocale[locale]);
+    const id = locales.join(',');
+    const group = groups.get(id) ?? { locales, keys: {} };
+    group.keys[key] = value;
+    groups.set(id, group);
+  }
+  const chunks = [...groups.values()].flatMap(({ locales, keys }) =>
+    chunkTranslations(keys, config.splitToken, locales.length).map((chunk) => ({ chunk, locales })),
+  );
   logger.dim(
-    `[${namespace}] ${chunks.length} chunk(s) × ${activeLocales.length} locale(s) = ${dryRun ? '0 (dry-run)' : chunks.length} request(s)`,
+    `[${namespace}] ${chunks.length} chunk(s) over ${groups.size} locale group(s) = ${dryRun ? '0 (dry-run)' : chunks.length} request(s)`,
   );
 
   if (!dryRun) {
@@ -184,16 +193,27 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     // immediately via setRateLimitSignal; recovery ramps up one step per 10 completed chunks.
     engine.setRateLimitSignal?.(() => pool.onRateLimited());
 
-    const tasks = chunks.map((chunk, i) => async () => {
+    // A cut-off response is billed in full and then sent again as two. One note per run,
+    // not per chunk: the cost is the same fact however many chunks it happened to.
+    let splitReported = false;
+    const onSplit = (): void => {
+      if (splitReported) return;
+      splitReported = true;
+      const w = `[${namespace}] Some responses were cut off at the engine's output limit and re-sent in halves. The cut-off ones were still billed; a lower splitToken avoids paying for them.`;
+      logger.warn(w);
+      stats.warnings.push(w);
+    };
+
+    const tasks = chunks.map(({ chunk, locales }, i) => async () => {
       try {
         await processChunk({
           chunk,
           i,
           total: chunks.length,
           engine,
-          activeLocales,
-          keysToTranslatePerLocale,
+          locales,
           delivered,
+          onSplit,
           from,
           sourceFlat,
           namespace,
@@ -229,21 +249,12 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
       failure = collapseChunkFailure(err, chunks.length, namespace);
     }
 
-    for (const chunk of chunks) {
-      for (const key of Object.keys(chunk.keys)) {
-        const hash = sourceHashesForTm[key];
-        if (!hash) continue;
-        const translations: Record<string, string> = {};
-        for (const locale of activeLocales) {
-          // Only what the engine delivered this run. A locale's untouched existing
-          // value is not a translation of this source hash and must not be recorded
-          // as one; entries merge across runs, so a partial record still accumulates.
-          if (!delivered[locale].has(key)) continue;
-          translations[locale] = workingTargets[locale][key];
-        }
-        if (Object.keys(translations).length > 0) {
-          updateTranslationMemory(translationMemory, hash, translations);
-        }
+    for (const locale of to) {
+      for (const key of delivered[locale]) {
+        // Only what the engine delivered this run. A locale's untouched existing
+        // value is not a translation of this source hash and must not be recorded
+        // as one; entries merge across runs, so a partial record still accumulates.
+        updateTranslationMemory(translationMemory, memoryKeys[key], { [locale]: workingTargets[locale][key] });
       }
     }
   }
@@ -284,282 +295,11 @@ function collapseChunkFailure(err: AggregateError, chunkCount: number, namespace
   const { errors } = err;
   const codes = errors.map((e) => (e instanceof LoquiError ? e.code : undefined));
   const [first] = codes;
-  if (errors.length === chunkCount && first !== undefined && codes.every((code) => code === first)) {
+  // AUTH stops the pool, so fewer errors than chunks is expected there.
+  const everyChunk = errors.length === chunkCount || first === 'AUTH';
+  if (everyChunk && first !== undefined && codes.every((code) => code === first)) {
     return errors[0] as LoquiError;
   }
   // What happened to the output is the caller's to say: only it knows whether anything was written.
   return new LoquiError('CHUNK_FAILED', `${errors.length} chunk(s) failed for [${namespace}].`, { cause: err });
-}
-
-// AIMD concurrency pool
-/**
- * Adaptive concurrency pool (AIMD — Additive Increase / Multiplicative Decrease).
- *
- * - Starts at the configured concurrency.
- * - Increases the active window by 1 after RAMP_AFTER consecutive successes.
- * - Halves the window (floor 1) on any rate-limit signal from the engine.
- *
- * The pool integrates with EngineAdapter.setRateLimitSignal?: engines call the
- * callback when they observe a 429, which feeds directly into onRateLimited().
- */
-export class ConcurrencyPool {
-  #window: number;
-  readonly #maxWindow: number;
-  #streak = 0;
-  static readonly #RAMP_AFTER = 10;
-
-  constructor(initial: number) {
-    this.#window = Math.max(1, initial);
-    this.#maxWindow = Math.max(1, initial);
-  }
-
-  get current(): number {
-    return this.#window;
-  }
-
-  onRateLimited(): void {
-    this.#window = Math.max(1, Math.ceil(this.#window / 2));
-    this.#streak = 0;
-  }
-
-  onSuccess(): void {
-    this.#streak++;
-    if (this.#streak >= ConcurrencyPool.#RAMP_AFTER) {
-      this.#window = Math.min(this.#maxWindow, this.#window + 1);
-      this.#streak = 0;
-    }
-  }
-
-  async run(tasks: (() => Promise<void>)[]): Promise<void> {
-    const executing = new Set<Promise<void>>();
-    const errors: unknown[] = [];
-
-    for (const task of tasks) {
-      const p: Promise<void> = (async () => {
-        try {
-          await task();
-          this.onSuccess();
-        } catch (err) {
-          errors.push(err);
-        }
-      })().finally(() => {
-        executing.delete(p);
-      });
-      executing.add(p);
-      while (executing.size >= this.#window) await Promise.race(executing);
-    }
-    await Promise.all(executing);
-
-    if (errors.length > 0) {
-      throw new AggregateError(errors, `${errors.length} task(s) failed`);
-    }
-  }
-}
-
-// ── internals ────────────────────────────────────────────────────────────────
-
-interface ProcessChunkOptions {
-  chunk: TranslationChunk;
-  i: number;
-  total: number;
-  engine: EngineAdapter;
-  activeLocales: string[];
-  /** per locale, the keys that locale actually needs. A chunk is the union across locales. */
-  keysToTranslatePerLocale: Record<string, FlatTranslations>;
-  /** per locale, the keys written this run; processChunk adds to it. */
-  delivered: Record<string, Set<string>>;
-  from: string;
-  sourceFlat: FlatTranslations;
-  namespace: string;
-  workingTargets: Record<string, FlatTranslations>;
-  config: LoquiConfig;
-  stats: RunStats;
-  glossaryModel?: GlossaryModel;
-}
-
-// Translations more than 4× the source length are almost certainly hallucinations.
-const MAX_EXPANSION_RATIO = 4;
-
-async function processChunk(opts: ProcessChunkOptions): Promise<void> {
-  const {
-    chunk,
-    i,
-    total,
-    engine,
-    activeLocales,
-    keysToTranslatePerLocale,
-    delivered,
-    from,
-    sourceFlat,
-    namespace,
-    workingTargets,
-    config,
-    stats,
-    glossaryModel,
-  } = opts;
-
-  const noTranslate = glossaryModel?.noTranslate ?? [];
-  const { maskedChunk, maskMaps, skipped } = maskChunk(chunk, config.placeholderPatterns, noTranslate);
-  for (const [key, reason] of Object.entries(skipped)) {
-    const w = `[${namespace}] Key "${key}" was not sent for translation: ${reason}`;
-    logger.warn(w);
-    stats.warnings.push(w);
-  }
-  if (Object.keys(maskedChunk.keys).length === 0) {
-    logger.dim(`[${namespace}] Chunk ${i + 1}/${total} had nothing left to send`);
-    return;
-  }
-
-  const chunkText = Object.values(chunk.keys).join('\n');
-  const glossaryBlock = glossaryModel ? buildGlossaryPromptBlock(glossaryModel.terms, chunkText, activeLocales) : '';
-
-  let results = await engine.translateChunk(maskedChunk, activeLocales, from, namespace, glossaryBlock);
-  stats.apiRequests++;
-
-  if (config.review && engine.reviewChunk) {
-    results = await engine.reviewChunk(maskedChunk, results, activeLocales, from, namespace, glossaryBlock);
-    stats.apiRequests++;
-  }
-
-  for (const locale of activeLocales) {
-    const localeResult = results[locale];
-    if (!localeResult) continue;
-
-    const restored = restoreChunk(localeResult.keys, maskMaps);
-
-    for (const [key, value] of Object.entries(restored)) {
-      // The chunk holds the union of every locale's needed keys, so a locale is sent
-      // keys it did not ask for. Writing those back would clobber existing values.
-      if (!(key in (keysToTranslatePerLocale[locale] ?? {}))) continue;
-
-      if (!value.trim()) {
-        const w = `[${namespace}→${locale}] Empty translation for key: "${key}"`;
-        logger.warn(w);
-        stats.warnings.push(w);
-        continue;
-      }
-
-      // Re-use the mask map already computed in maskChunk — avoids re-running all placeholder regexes.
-      const originalTokens = Object.values(maskMaps[key] ?? {});
-      const missing = [...new Set(originalTokens)].filter((t) => !value.includes(t));
-      if (missing.length > 0) {
-        const w = `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${missing.join(', ')} — skipped, will retry on next run`;
-        logger.warn(w);
-        stats.warnings.push(w);
-        continue;
-      }
-
-      // Glossary term-lock: the locked target term must appear in the translation.
-      if (glossaryModel) {
-        const sourceTerms = findTermsInText(sourceFlat[key] ?? '', Object.keys(glossaryModel.terms));
-        const missingTerms = sourceTerms.filter((term) => {
-          const locked = glossaryModel.terms[term]?.[locale];
-          return locked && !value.toLowerCase().includes(locked.toLowerCase());
-        });
-        if (missingTerms.length > 0) {
-          const w = `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`;
-          logger.warn(w);
-          stats.warnings.push(w);
-          continue;
-        }
-      }
-
-      const sourceValue = sourceFlat[key] ?? '';
-
-      // Untranslated detection: value identical to source suggests the model
-      // returned the input unchanged. Warn but save — could be a proper noun.
-      if (locale !== from && sourceValue.trim() !== '' && value.trim() === sourceValue.trim()) {
-        const w = `[${namespace}→${locale}] Key "${key}" appears untranslated (identical to source)`;
-        logger.warn(w);
-        stats.warnings.push(w);
-      }
-
-      // Length explosion: ratio > 4× source is almost certainly a hallucination.
-      if (sourceValue.length > 0 && value.length > sourceValue.length * MAX_EXPANSION_RATIO) {
-        const ratio = Math.round(value.length / sourceValue.length);
-        const w = `[${namespace}→${locale}] Key "${key}" translation is ${ratio}× source length — possible hallucination`;
-        logger.warn(w);
-        stats.warnings.push(w);
-      }
-
-      workingTargets[locale][key] = value;
-      delivered[locale].add(key);
-      stats.keysTranslated++;
-    }
-  }
-
-  logger.dim(`[${namespace}] Chunk ${i + 1}/${total} done`);
-}
-
-function maskChunk(
-  chunk: TranslationChunk,
-  customPatterns?: string[],
-  noTranslate: string[] = [],
-): {
-  maskedChunk: TranslationChunk;
-  maskMaps: Record<string, Record<string, string>>;
-  /** keys left out of the chunk, with why. One malformed value must not fail the keys beside it. */
-  skipped: Record<string, string>;
-} {
-  const maskedKeys: FlatTranslations = {};
-  const maskMaps: Record<string, Record<string, string>> = {};
-  const skipped: Record<string, string> = {};
-  for (const [key, value] of Object.entries(chunk.keys)) {
-    // 1) mask do-not-translate terms first (T-prefix range: ⟦T0⟧, ⟦T1⟧…)
-    const termMask = maskTerms(value, noTranslate, 0);
-    // 2) mask placeholders on the already-term-masked string (⟦0⟧, ⟦1⟧…)
-    try {
-      const { masked, map } = maskPlaceholders(termMask.masked, customPatterns);
-      maskedKeys[key] = masked;
-      maskMaps[key] = { ...termMask.map, ...map };
-    } catch (err) {
-      // Only the value's own malformation is skippable; a bad config pattern fails every key alike.
-      if (!(err instanceof IcuMaskError)) throw err;
-      skipped[key] = err.message;
-    }
-  }
-  return { maskedChunk: { keys: maskedKeys }, maskMaps, skipped };
-}
-
-function restoreChunk(
-  translatedKeys: FlatTranslations,
-  maskMaps: Record<string, Record<string, string>>,
-): FlatTranslations {
-  const restored: FlatTranslations = {};
-  for (const [key, value] of Object.entries(translatedKeys)) {
-    restored[key] = restorePlaceholders(value, maskMaps[key] ?? {});
-  }
-  return restored;
-}
-
-// Exported for unit testing.
-export function chunkTranslations(flat: FlatTranslations, splitToken: number, localeCount: number): TranslationChunk[] {
-  // Cap keys per chunk at floor(STRUCTURED_OUTPUT_MAX_PROPS / localeCount) so that
-  // locales × keys ≤ STRUCTURED_OUTPUT_MAX_PROPS in every chunk, keeping OpenAI
-  // json_schema and Anthropic tool_use active. Gemini's limit is 50 (harder cap)
-  // but its responseMimeType:'application/json' fallback only enforces JSON syntax —
-  // not schema shape; missing/extra keys are possible. extractTranslations handles
-  // that gracefully via per-key warnings and empty-string defaults.
-  const maxKeysPerChunk =
-    localeCount > 0 ? Math.max(1, Math.floor(STRUCTURED_OUTPUT_MAX_PROPS / localeCount)) : STRUCTURED_OUTPUT_MAX_PROPS;
-  const chunks: TranslationChunk[] = [];
-  let current: FlatTranslations = {};
-  let currentTokens = 0;
-  let currentSize = 0;
-
-  for (const [key, value] of Object.entries(flat)) {
-    const entryTokens = Math.ceil((`"${key}": "${value}",\n`.length / 4) * (1 + localeCount));
-    if ((currentTokens + entryTokens > splitToken || currentSize >= maxKeysPerChunk) && currentSize > 0) {
-      chunks.push({ keys: current });
-      current = {};
-      currentTokens = 0;
-      currentSize = 0;
-    }
-    current[key] = value;
-    currentTokens += entryTokens;
-    currentSize++;
-  }
-
-  if (currentSize > 0) chunks.push({ keys: current });
-  return chunks;
 }

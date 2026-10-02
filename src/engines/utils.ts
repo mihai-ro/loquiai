@@ -33,11 +33,11 @@ export function sanitizeForDisplay(text: string, max = 300): string {
 }
 
 /**
- * Values that mean "stopped because the output token limit was reached", across the
- * three engines: OpenAI `finish_reason: "length"`, Anthropic `stop_reason: "max_tokens"`,
- * Gemini `finishReason: "MAX_TOKENS"`.
+ * Values that mean "the response was cut short by a token limit", across the three
+ * engines: OpenAI `finish_reason: "length"`, Anthropic `stop_reason: "max_tokens"` or
+ * `"model_context_window_exceeded"`, Gemini `finishReason: "MAX_TOKENS"`.
  */
-const TRUNCATION_REASONS = new Set(['length', 'max_tokens']);
+const TRUNCATION_REASONS = new Set(['length', 'max_tokens', 'model_context_window_exceeded']);
 
 /**
  * Fails a response that was cut off by the token limit.
@@ -62,8 +62,8 @@ export function exponentialBackoff(attempt: number, baseMs = 5_000, maxMs = 120_
   return Math.min(exponential + jitter, maxMs);
 }
 
-export async function defaultRetryAfterHeader(response: Response): Promise<number | null> {
-  const header = response.headers.get('retry-after');
+export function defaultRetryAfterHeader(headers: Headers): number | null {
+  const header = headers.get('retry-after');
   if (!header) return null;
   const seconds = parseInt(header, 10);
   return Number.isFinite(seconds) ? seconds * 1000 + 500 : null;
@@ -74,7 +74,8 @@ const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 529]);
 
 export interface RetryOptions {
   maxRetries?: number;
-  parseRetryDelay?: (response: Response) => Promise<number | null>;
+  /** the server's own wait before a retry, in ms, from a 429's headers and body. */
+  parseRetryDelay?: (headers: Headers, body: string) => number | null;
   engineName?: string;
   timeoutMs?: number;
   /** called immediately when a 429 is received (before the retry sleep). Used by AIMD. */
@@ -85,22 +86,12 @@ export interface RetryOptions {
   sleepFn?: (ms: number) => Promise<void>;
 }
 
-/** Statuses the Response constructor refuses to pair with a body. */
-const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
-
 /**
- * Rebuilds a Response around an already-read body, so callers can still use
- * `.json()` without a second trip to the network.
+ * Sends the request, retrying what is transient, and returns the parsed JSON body.
+ * A 2xx body that is not JSON is INVALID_RESPONSE: it is a proxy or gateway page, not
+ * an answer, and a retry would fetch the same page.
  */
-function cloneWithBody(response: Response, body: string): Response {
-  return new Response(NULL_BODY_STATUS.has(response.status) ? null : body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
-export async function fetchWithRetry(url: string, init: RequestInit, options: RetryOptions = {}): Promise<Response> {
+export async function fetchWithRetry(url: string, init: RequestInit, options: RetryOptions = {}): Promise<unknown> {
   const {
     maxRetries = 5,
     parseRetryDelay = defaultRetryAfterHeader,
@@ -122,14 +113,12 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
     let bodyText: string;
 
     try {
-      const raw = await fetchImpl(url, { ...init, signal: controller.signal });
+      response = await fetchImpl(url, { ...init, signal: controller.signal });
       // The body is read here, while the abort is still armed. Clearing the timeout
-      // as soon as headers arrive leaves the caller's response.json() unbounded, so a
-      // server that answers and then stalls mid-body hangs the run forever.
-      bodyText = await raw.text();
-      response = cloneWithBody(raw, bodyText);
+      // as soon as headers arrive leaves the body read unbounded, so a server that
+      // answers and then stalls mid-body hangs the run forever.
+      bodyText = await response.text();
     } catch (err) {
-      clearTimeout(timeoutId);
       if ((err as Error).name === 'AbortError') {
         throw new LoquiError('TIMEOUT', `[${engineName}] Request timed out after ${timeoutMs / 1000}s`);
       }
@@ -162,7 +151,7 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
         );
       }
 
-      const serverDelay = response.status === 429 ? await parseRetryDelay(response) : null;
+      const serverDelay = response.status === 429 ? parseRetryDelay(response.headers, bodyText) : null;
       const waitMs = serverDelay ?? exponentialBackoff(attempt);
       logger.dim(
         `[retry] ${engineName} ${response.status} — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})...`,
@@ -177,6 +166,13 @@ export async function fetchWithRetry(url: string, init: RequestInit, options: Re
       throw new LoquiError(code, `${engineName} API error ${response.status}: ${sanitizeForDisplay(bodyText)}`);
     }
 
-    return response;
+    try {
+      return JSON.parse(bodyText);
+    } catch {
+      throw new LoquiError(
+        'INVALID_RESPONSE',
+        `${engineName} returned a body that is not JSON: ${sanitizeForDisplay(bodyText) || '(empty)'}`,
+      );
+    }
   }
 }

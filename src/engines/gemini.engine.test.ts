@@ -214,3 +214,59 @@ describe('GeminiEngine — truncated response', () => {
     assert.equal(result.fr.keys.greeting, 'Bonjour');
   });
 });
+
+describe('GeminiEngine — a body that is not JSON', () => {
+  before(() => {
+    process.env.GEMINI_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  test('throws INVALID_RESPONSE', async () => {
+    const engine = new GeminiEngine({ ...CONFIG_DEFAULTS, engine: 'gemini' });
+    engine._setFetch(mockFetch('<html>proxy error</html>'));
+
+    await assert.rejects(
+      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_RESPONSE',
+    );
+  });
+});
+
+describe('GeminiEngine — a 429 that says how long to wait', () => {
+  before(() => {
+    process.env.GEMINI_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  test('waits the delay in the RetryInfo detail', async () => {
+    const engine = new GeminiEngine({ ...CONFIG_DEFAULTS, engine: 'gemini' });
+    const sleeps: number[] = [];
+    let calls = 0;
+    engine._setFetch(
+      async () => {
+        calls++;
+        if (calls > 1) return new Response(successBody);
+        return Response.json(
+          {
+            error: {
+              details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '12s' }],
+            },
+          },
+          { status: 429 },
+        );
+      },
+      async (ms) => {
+        sleeps.push(ms);
+      },
+    );
+
+    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+
+    assert.deepEqual(sleeps, [12_500]);
+    assert.equal(result.fr.keys.greeting, 'Bonjour');
+  });
+});

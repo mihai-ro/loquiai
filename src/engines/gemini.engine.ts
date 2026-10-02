@@ -38,7 +38,7 @@ export class GeminiEngine extends BaseEngine {
       },
     };
 
-    const response = await fetchWithRetry(
+    const data = (await fetchWithRetry(
       url,
       {
         method: 'POST',
@@ -56,9 +56,7 @@ export class GeminiEngine extends BaseEngine {
         onRateLimited: this.getRateLimitSignal(),
         ...this.retryHooks(),
       },
-    );
-
-    const data = (await response.json()) as GeminiResponse;
+    )) as GeminiResponse;
     assertComplete(data?.candidates?.[0]?.finishReason, 'Gemini');
 
     const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -72,9 +70,9 @@ export class GeminiEngine extends BaseEngine {
   }
 }
 
-async function parseGeminiRetryDelay(response: Response): Promise<number | null> {
+function parseGeminiRetryDelay(_headers: Headers, bodyText: string): number | null {
   try {
-    const body = (await response.json()) as GeminiErrorResponse;
+    const body = JSON.parse(bodyText) as GeminiErrorResponse;
     const retryInfo = body?.error?.details?.find((d) => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
     if (retryInfo?.retryDelay) {
       const seconds = parseInt(retryInfo.retryDelay.replace('s', ''), 10);

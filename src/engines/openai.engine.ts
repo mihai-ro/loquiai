@@ -42,7 +42,7 @@ export class OpenAIEngine extends BaseEngine {
       ],
     };
 
-    const response = await fetchWithRetry(
+    const data = (await fetchWithRetry(
       `${OPENAI_API_BASE}/chat/completions`,
       {
         method: 'POST',
@@ -59,9 +59,7 @@ export class OpenAIEngine extends BaseEngine {
         onRateLimited: this.getRateLimitSignal(),
         ...this.retryHooks(),
       },
-    );
-
-    const data = (await response.json()) as OpenAIResponse;
+    )) as OpenAIResponse;
     assertComplete(data?.choices?.[0]?.finish_reason, 'OpenAI');
 
     const raw = data?.choices?.[0]?.message?.content;

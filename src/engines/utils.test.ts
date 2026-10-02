@@ -79,7 +79,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
         },
       },
     );
-    assert.equal(result.status, 200);
+    assert.deepEqual(result, {});
     assert.equal(calls, 2);
   });
 
@@ -125,7 +125,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
         },
       },
     );
-    assert.equal(result.status, 200);
+    assert.deepEqual(result, {});
     assert.equal(calls, 2);
   });
 
@@ -144,7 +144,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
         },
       },
     );
-    assert.equal(result.status, 200);
+    assert.deepEqual(result, {});
     assert.equal(calls, 2);
   });
 
@@ -216,7 +216,7 @@ describe('fetchWithRetry — 5xx transient retry', () => {
         },
       },
     );
-    assert.equal(result.status, 200);
+    assert.deepEqual(result, {});
     assert.equal(calls, 2);
   });
 
@@ -290,6 +290,10 @@ describe('assertComplete', () => {
     );
   });
 
+  test('throws TRUNCATED when Anthropic ran out of context window', () => {
+    assert.throws(() => assertComplete('model_context_window_exceeded', 'Anthropic'), truncated);
+  });
+
   test('passes normal stop reasons through', () => {
     assert.doesNotThrow(() => assertComplete('stop', 'OpenAI'));
     assert.doesNotThrow(() => assertComplete('end_turn', 'Anthropic'));
@@ -325,36 +329,108 @@ describe('fetchWithRetry — response body timeout', () => {
     );
   });
 
-  test('a normal body is still readable by the caller', async () => {
-    const response = await fetchWithRetry(
+  test('a normal body comes back parsed', async () => {
+    const body = await fetchWithRetry(
       'https://example.invalid/v1',
       {},
       { fetchFn: async () => new Response('{"ok":true}', { status: 200 }) },
     );
 
-    assert.deepEqual(await response.json(), { ok: true });
+    assert.deepEqual(body, { ok: true });
   });
 
-  test('preserves status and headers through the body read', async () => {
-    const response = await fetchWithRetry(
-      'https://example.invalid/v1',
+  test('an empty 2xx body is an invalid response, not a result', async () => {
+    await assert.rejects(
+      fetchWithRetry('https://example.invalid/v1', {}, { fetchFn: async () => new Response(null, { status: 204 }) }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_RESPONSE',
+    );
+  });
+});
+
+describe('fetchWithRetry — a 2xx body that is not JSON', () => {
+  const html = '<html><body>Bad gateway from a proxy</body></html>';
+
+  test('throws INVALID_RESPONSE with the body, without retrying', async () => {
+    let calls = 0;
+    await assert.rejects(
+      fetchWithRetry(
+        'http://test',
+        {},
+        {
+          engineName: 'MyEngine',
+          sleepFn: noSleep,
+          fetchFn: async () => {
+            calls++;
+            return mockResponse(200, html);
+          },
+        },
+      ),
+      (err: unknown) =>
+        err instanceof LoquiError &&
+        err.code === 'INVALID_RESPONSE' &&
+        err.message.includes('MyEngine') &&
+        err.message.includes('Bad gateway'),
+    );
+    assert.equal(calls, 1);
+  });
+
+  test('redacts secrets from the body it quotes', async () => {
+    await assert.rejects(
+      fetchWithRetry(
+        'http://test',
+        {},
+        { fetchFn: async () => mockResponse(200, 'echo sk-1234567890abcdefghij1234567890abcdef') },
+      ),
+      (err: unknown) => err instanceof LoquiError && !err.message.includes('1234567890abcdef'),
+    );
+  });
+});
+
+describe('fetchWithRetry — how long a 429 waits', () => {
+  /** Answers 429 once with `headers`/`body`, then succeeds; returns every sleep it was asked for. */
+  async function sleepsAfter429(headers: HeadersInit, body: string, options: RetryOptions = {}): Promise<number[]> {
+    const sleeps: number[] = [];
+    let calls = 0;
+    await fetchWithRetry(
+      'http://test',
       {},
       {
-        fetchFn: async () => new Response('{}', { status: 200, statusText: 'OK', headers: { 'x-request-id': 'abc' } }),
+        engineName: 'Test',
+        maxRetries: 3,
+        sleepFn: async (ms) => {
+          sleeps.push(ms);
+        },
+        fetchFn: async () => {
+          calls++;
+          return calls < 2 ? new Response(body, { status: 429, headers }) : mockResponse(200, '{}');
+        },
+        ...options,
       },
     );
+    return sleeps;
+  }
 
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get('x-request-id'), 'abc');
+  test('waits what the Retry-After header says', async () => {
+    assert.deepEqual(await sleepsAfter429({ 'retry-after': '7' }, 'slow down'), [7_500]);
   });
 
-  test('handles a status that cannot carry a body', async () => {
-    const response = await fetchWithRetry(
-      'https://example.invalid/v1',
-      {},
-      { fetchFn: async () => new Response(null, { status: 204 }) },
-    );
+  test('hands a custom parseRetryDelay the headers and the body text', async () => {
+    let seen: { retryAfter: string | null; body: string } | undefined;
 
-    assert.equal(response.status, 204);
+    const sleeps = await sleepsAfter429({ 'retry-after': '1' }, 'quota exhausted', {
+      parseRetryDelay: (headers, body) => {
+        seen = { retryAfter: headers.get('retry-after'), body };
+        return 250;
+      },
+    });
+
+    assert.deepEqual(seen, { retryAfter: '1', body: 'quota exhausted' });
+    assert.deepEqual(sleeps, [250]);
+  });
+
+  test('backs off on its own when there is no server delay', async () => {
+    const [waited] = await sleepsAfter429({}, 'slow down');
+
+    assert.ok(waited >= 5_000, `expected the exponential floor, got ${waited}`);
   });
 });

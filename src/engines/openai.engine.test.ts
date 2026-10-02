@@ -210,3 +210,22 @@ describe('OpenAIEngine — truncated response', () => {
     assert.equal(result.fr.keys.title, 'Bonjour');
   });
 });
+
+describe('OpenAIEngine — a body that is not JSON', () => {
+  before(() => {
+    process.env.OPENAI_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  test('throws INVALID_RESPONSE', async () => {
+    const engine = new OpenAIEngine({ ...CONFIG_DEFAULTS, engine: 'openai' });
+    engine._setFetch(mockFetch('<html>proxy error</html>'));
+
+    await assert.rejects(
+      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_RESPONSE',
+    );
+  });
+});

@@ -205,6 +205,25 @@ describe('buildAnthropicInputSchema', () => {
   });
 });
 
+describe('AnthropicEngine — a body that is not JSON', () => {
+  before(() => {
+    process.env.ANTHROPIC_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  test('throws INVALID_RESPONSE', async () => {
+    const engine = new AnthropicEngine({ ...CONFIG_DEFAULTS, engine: 'anthropic' });
+    engine._setFetch(mockFetch('<html>proxy error</html>'));
+
+    await assert.rejects(
+      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_RESPONSE',
+    );
+  });
+});
+
 describe('AnthropicEngine — truncated response', () => {
   before(() => {
     process.env.ANTHROPIC_API_KEY = FAKE_KEY;
@@ -230,6 +249,23 @@ describe('AnthropicEngine — truncated response', () => {
     );
   });
 
+  test('throws TRUNCATED when the context window is exhausted', async () => {
+    const engine = new AnthropicEngine({ ...CONFIG_DEFAULTS, engine: 'anthropic' });
+    engine._setFetch(
+      mockFetch(
+        JSON.stringify({
+          content: [{ type: 'tool_use', id: 'toolu_01', name: 'output_translations', input: { fr: {} } }],
+          stop_reason: 'model_context_window_exceeded',
+        }),
+      ),
+    );
+
+    await assert.rejects(
+      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED',
+    );
+  });
+
   test('a normal stop_reason still succeeds', async () => {
     const engine = new AnthropicEngine({ ...CONFIG_DEFAULTS, engine: 'anthropic' });
     engine._setFetch(async () => new Response(toolUseBody));
@@ -247,17 +283,31 @@ describe('deriveMaxTokens', () => {
     delete process.env.ANTHROPIC_API_KEY;
   });
 
-  test('scales with chunk size and locale count instead of a constant', () => {
-    assert.ok(deriveMaxTokens(4000, 4) > deriveMaxTokens(4000, 1));
-    assert.ok(deriveMaxTokens(8000, 2) > deriveMaxTokens(4000, 2));
+  test('scales with chunk size instead of a constant', () => {
+    assert.ok(deriveMaxTokens(8000) > deriveMaxTokens(4000));
   });
 
   test('keeps a floor so small chunks still get a usable budget', () => {
-    assert.ok(deriveMaxTokens(10, 1) >= 4096);
+    assert.ok(deriveMaxTokens(10) >= 4096);
   });
 
   test('caps the budget so the request stays inside model output limits', () => {
-    assert.ok(deriveMaxTokens(32000, 10) <= 64000);
+    assert.ok(deriveMaxTokens(32000) <= 64000);
+  });
+
+  test('the request budget does not grow with the locale count', async () => {
+    const engine = new AnthropicEngine({ ...CONFIG_DEFAULTS, engine: 'anthropic', splitToken: 8000 });
+    const sent: unknown[] = [];
+    engine._setFetch(async (_url, init) => {
+      sent.push((JSON.parse(init.body as string) as Record<string, unknown>).max_tokens);
+      return new Response(toolUseBody);
+    });
+    const tenLocales = ['fr', 'de', 'es', 'it', 'pt', 'nl', 'sv', 'da', 'fi', 'pl'];
+
+    await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    await engine.translateChunk(mockChunk, tenLocales, 'en', 'test');
+
+    assert.equal(sent[0], sent[1], 'splitToken already budgets source plus every locale');
   });
 
   test('is sent as max_tokens on the request', async () => {
@@ -269,6 +319,6 @@ describe('deriveMaxTokens', () => {
     });
 
     await engine.translateChunk(mockChunk, ['fr', 'de'], 'en', 'test');
-    assert.equal(capturedBody.max_tokens, deriveMaxTokens(8000, 2));
+    assert.equal(capturedBody.max_tokens, deriveMaxTokens(8000));
   });
 });

@@ -30,7 +30,7 @@ export class AnthropicEngine extends BaseEngine {
 
     const body: Record<string, unknown> = {
       model,
-      max_tokens: deriveMaxTokens(this.config.splitToken, targetLocales.length),
+      max_tokens: deriveMaxTokens(this.config.splitToken),
       temperature: this.config.temperature,
       top_p: this.config.topP,
       system: systemPrompt,
@@ -43,7 +43,7 @@ export class AnthropicEngine extends BaseEngine {
         : {}),
     };
 
-    const response = await fetchWithRetry(
+    const data = (await fetchWithRetry(
       `${ANTHROPIC_API_BASE}/messages`,
       {
         method: 'POST',
@@ -61,9 +61,7 @@ export class AnthropicEngine extends BaseEngine {
         onRateLimited: this.getRateLimitSignal(),
         ...this.retryHooks(),
       },
-    );
-
-    const data = (await response.json()) as AnthropicResponse;
+    )) as AnthropicResponse;
     assertComplete(data?.stop_reason, 'Anthropic');
 
     const toolBlock = data?.content?.find((b) => b.type === 'tool_use');
@@ -84,17 +82,21 @@ export class AnthropicEngine extends BaseEngine {
 
 /**
  * Anthropic requires an explicit max_tokens, and a constant one truncates as soon as
- * splitToken or the locale count grows: the reply repeats the chunk once per locale,
- * wrapped in JSON, and a translation usually runs longer than its source. The floor
- * keeps small chunks workable; the ceiling stays inside current model output limits.
- * Past the ceiling the response is cut off, which assertComplete reports as TRUNCATED.
+ * splitToken grows: the reply wraps every translation in JSON, and a translation
+ * usually runs longer than its source. splitToken already budgets the source plus
+ * every target locale (see chunkTranslations), so the locale count is not applied a
+ * second time. The overhead is headroom over that budget: its `length / 4` token
+ * estimate undercounts CJK and Cyrillic, which take more tokens per character. The
+ * floor keeps small chunks workable; the ceiling stays inside current model output
+ * limits. Past the ceiling the response is cut off, which assertComplete reports as
+ * TRUNCATED.
  */
 const MIN_OUTPUT_TOKENS = 4_096;
 const MAX_OUTPUT_TOKENS = 64_000;
-const OUTPUT_OVERHEAD = 1.5;
+const OUTPUT_OVERHEAD = 3;
 
-export function deriveMaxTokens(splitToken: number, localeCount: number): number {
-  const estimate = Math.ceil(splitToken * Math.max(localeCount, 1) * OUTPUT_OVERHEAD);
+export function deriveMaxTokens(splitToken: number): number {
+  const estimate = Math.ceil(splitToken * OUTPUT_OVERHEAD);
   return Math.min(Math.max(estimate, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS);
 }
 

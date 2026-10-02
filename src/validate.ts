@@ -1,4 +1,5 @@
 import type { FlatTranslations } from './types.js';
+import { isUntranslated } from './untranslated.js';
 
 export interface ValidationResult {
   locale: string;
@@ -22,7 +23,7 @@ export function validateLocales(
     const ok: string[] = [];
 
     for (const key of sourceKeys) {
-      if (targetKeys.has(key)) {
+      if (targetKeys.has(key) && !isUntranslated(sourceFlat[key], targetFlat[key])) {
         ok.push(key);
       } else {
         missing.push(key);

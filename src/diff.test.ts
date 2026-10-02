@@ -152,4 +152,14 @@ describe('diffLocales', () => {
     assert.deepEqual(results[0].added, ['key']);
     assert.deepEqual(results[0].removed, []);
   });
+
+  test('a blank target for a source with text is listed as added, not unchanged', () => {
+    const source = { title: 'Hello', blank: '' };
+
+    const [fr] = diffLocales(source, { fr: { title: '', blank: '' } }, hashesFor(source));
+
+    assert.deepEqual(fr.added, ['title']);
+    assert.deepEqual(fr.unchanged, ['blank']);
+    assert.deepEqual(fr.changed, []);
+  });
 });

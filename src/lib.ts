@@ -161,13 +161,13 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
 
   // load existing translations (for missing-key detection)
   const existing: Record<string, FlatTranslations> = {};
-  // the target file's own structure, so anything it holds that the source does not survives a rewrite
-  const existingDocs: Record<string, FlatDocument> = {};
+  // every leaf key a target file holds, to tell which ones the source no longer has
+  const existingKeys: Record<string, string[]> = {};
   for (const locale of to) {
     const dest = outputPaths?.[locale];
     if (dest && fs.existsSync(dest)) {
       const doc = flatten(readJson(dest) as Record<string, unknown>);
-      existingDocs[locale] = doc;
+      existingKeys[locale] = [...Object.keys(doc.strings), ...Object.keys(doc.values)];
       existing[locale] = doc.strings;
     }
   }
@@ -263,19 +263,33 @@ export async function translate(options: TranslateOptions): Promise<Record<strin
     engine: options.engine,
   });
 
+  // A run that failed without translating anything has nothing to persist. Writing
+  // anyway would create locale files holding only the source's non-string values,
+  // and would prune the hash sidecar on the strength of a run that never happened.
+  const nothingLanded = failure !== undefined && stats.keysTranslated === 0;
+
+  // A target holds exactly the source's keys, so a rewrite drops the rest. Say which.
+  if (!nothingLanded) {
+    for (const [locale, keys] of Object.entries(existingKeys)) {
+      const dropped = keys.filter(
+        (key) => !Object.hasOwn(sourceDoc.strings, key) && !Object.hasOwn(sourceDoc.values, key),
+      );
+      if (dropped.length === 0) continue;
+      stats.warnings.push(
+        `[${namespace}→${locale}] ${options.dryRun ? 'Would remove' : 'Removed'} ${dropped.length} key(s) the source no longer has`,
+      );
+      for (const key of dropped) logger.dim(`  - ${locale}: ${key}`);
+    }
+  }
+
   logStats(stats);
 
   // serialize results
   const result: Record<string, string> = {};
   for (const [locale, flat] of Object.entries(translations)) {
-    const doc = withStrings(sourceDoc, flat, existingDocs[locale]);
+    const doc = withStrings(sourceDoc, flat);
     result[locale] = `${JSON.stringify(deepSortKeys(unflatten(doc)), null, 2)}\n`;
   }
-
-  // A run that failed without translating anything has nothing to persist. Writing
-  // anyway would create locale files holding only the source's non-string values,
-  // and would prune the hash sidecar on the strength of a run that never happened.
-  const nothingLanded = failure !== undefined && stats.keysTranslated === 0;
 
   // write output files
   if (outputPaths && !options.dryRun && !nothingLanded) {

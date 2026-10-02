@@ -454,6 +454,225 @@ describe('translate — non-string values survive the round trip', () => {
   });
 });
 
+describe("translate — a target file holds exactly the source's keys", () => {
+  function project(source: unknown, target: unknown): { dir: string; input: string; fr: string } {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    const fr = path.join(dir, 'fr.json');
+    fs.writeFileSync(input, JSON.stringify(source), 'utf-8');
+    fs.writeFileSync(fr, JSON.stringify(target), 'utf-8');
+    return { dir, input, fr };
+  }
+
+  function countingEngine(): { engine: EngineAdapter; calls: () => number } {
+    let calls = 0;
+    const inner = makeEngine();
+    return {
+      engine: {
+        async translateChunk(...args) {
+          calls++;
+          return inner.translateChunk(...args);
+        },
+      },
+      calls: () => calls,
+    };
+  }
+
+  async function stderrOf(fn: () => Promise<unknown>): Promise<string> {
+    let text = '';
+    const real = process.stderr.write;
+    process.stderr.write = ((chunk: string) => {
+      text += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await fn();
+    } finally {
+      process.stderr.write = real;
+    }
+    return text;
+  }
+
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf-8'));
+
+  test('a key restructured from an object to a string is translated once, then left alone', async () => {
+    const { dir, input, fr } = project({ a: 'Hello' }, { a: { b: 'ancien' } });
+    const { engine, calls } = countingEngine();
+    const options = { input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine };
+
+    await translate(options);
+    assert.deepEqual(read(fr), { a: 'HELLO' });
+    assert.equal(calls(), 1);
+
+    await translate(options);
+    assert.equal(calls(), 1, 'the second run has nothing to do');
+  });
+
+  test('an array that shrank loses its old tail', async () => {
+    const { dir, input, fr } = project({ items: ['a', 'b'] }, { items: ['x', 'y', 'z'] });
+
+    await translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine: makeEngine() });
+
+    assert.deepEqual(read(fr), { items: ['x', 'y'] });
+  });
+
+  test('a key the source never had is removed, and the locale is told how many', async () => {
+    const { dir, input, fr } = project({ a: 'Hello' }, { a: 'Bonjour', stale: 'x', old: { deep: 'y' } });
+
+    const err = await stderrOf(() =>
+      translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine: makeEngine() }),
+    );
+
+    assert.deepEqual(read(fr), { a: 'Bonjour' });
+    assert.match(err, /fr\W.*Removed 2 key\(s\)/);
+    assert.match(err, /stale/);
+    assert.match(err, /old\.deep/);
+  });
+
+  test('a dry run leaves the file byte-identical and says what it would remove', async () => {
+    const { dir, input, fr } = project({ a: 'Hello' }, { a: 'Bonjour', stale: 'x' });
+    const before = fs.readFileSync(fr, 'utf-8');
+
+    const err = await stderrOf(() =>
+      translate({
+        input,
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        dryRun: true,
+        engine: makeEngine(),
+      }),
+    );
+
+    assert.equal(fs.readFileSync(fr, 'utf-8'), before);
+    assert.match(err, /Would remove 1 key\(s\)/);
+    assert.match(err, /stale/);
+  });
+
+  test('a run with nothing to translate still writes the pruned file', async () => {
+    const { dir, input, fr } = project({ a: 'Hello' }, { a: 'Bonjour', stale: 'x' });
+    const { engine, calls } = countingEngine();
+
+    await translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine });
+
+    assert.equal(calls(), 0);
+    assert.deepEqual(read(fr), { a: 'Bonjour' });
+  });
+
+  test('a target string at a key where the source holds a number is written as the number', async () => {
+    const { dir, input, fr } = project({ count: 3 }, { count: 'trois' });
+
+    await translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine: makeEngine() });
+
+    assert.deepEqual(read(fr), { count: 3 });
+  });
+
+  test('a null in the target does not replace a string the source now defines', async () => {
+    const { dir, input, fr } = project({ title: 'Hello' }, { title: null });
+
+    await translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine: makeEngine() });
+
+    assert.deepEqual(read(fr), { title: 'HELLO' });
+  });
+});
+
+describe('translate — a blank target means not translated yet', () => {
+  function project(source: unknown, target?: unknown): { dir: string; input: string; fr: string } {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    const fr = path.join(dir, 'fr.json');
+    fs.writeFileSync(input, JSON.stringify(source), 'utf-8');
+    if (target !== undefined) fs.writeFileSync(fr, JSON.stringify(target), 'utf-8');
+    return { dir, input, fr };
+  }
+
+  /** Uppercases, but answers nothing for keys ending in a name from `refuse`; records what it was sent. */
+  function engineRefusing(refuse: string[], sent: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        sent.push(...Object.keys(chunk.keys));
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            {
+              keys: Object.fromEntries(
+                Object.entries(chunk.keys)
+                  .filter(([k]) => !refuse.some((r) => k.endsWith(r)))
+                  .map(([k, v]) => [k, v.toUpperCase()]),
+              ),
+            },
+          ]),
+        );
+      },
+    };
+  }
+
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf-8'));
+  const run = (dir: string, input: string, engine: EngineAdapter, extra: Record<string, unknown> = {}) =>
+    translate({ input, from: 'en', to: ['fr'], output: path.join(dir, '{locale}.json'), engine, ...extra });
+
+  test('a target file of empty strings is translated, not reported as up to date', async () => {
+    const { dir, input, fr } = project({ title: 'Hello' }, { title: '' });
+    const sent: string[] = [];
+
+    await run(dir, input, engineRefusing([], sent));
+
+    assert.deepEqual(sent, ['title']);
+    assert.deepEqual(read(fr), { title: 'HELLO' });
+  });
+
+  for (const incremental of [false, true]) {
+    test(`a refused array element is written as "" and is the only thing sent next time (incremental: ${incremental})`, async () => {
+      const { dir, input, fr } = project({ items: ['a', 'b', 'c'] });
+      const extra = incremental ? { incremental: true } : {};
+
+      await run(dir, input, engineRefusing(['items.1'], []), extra);
+      assert.deepEqual(read(fr), { items: ['A', '', 'C'] });
+
+      const sent: string[] = [];
+      await run(dir, input, engineRefusing([], sent), extra);
+      assert.deepEqual(sent, ['items.1']);
+      assert.deepEqual(read(fr), { items: ['A', 'B', 'C'] });
+    });
+  }
+
+  test('a refused field of an object in an array is written as ""', async () => {
+    const { dir, input, fr } = project({ steps: [{ title: 'T', body: 'B' }] });
+
+    await run(dir, input, engineRefusing(['body'], []));
+
+    assert.deepEqual(read(fr), { steps: [{ title: 'T', body: '' }] });
+  });
+
+  test('a refused key outside any array is absent from the file', async () => {
+    const { dir, input, fr } = project({ a: 'x', b: 'y' });
+
+    await run(dir, input, engineRefusing(['b'], []));
+
+    assert.deepEqual(read(fr), { a: 'X' });
+  });
+
+  test('an engine answer of an empty string is still rejected', async () => {
+    const { dir, input, fr } = project({ items: ['a', 'b'] });
+    const engine: EngineAdapter = {
+      async translateChunk(chunk, targetLocales) {
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, k.endsWith('1') ? '' : 'DONE'])) },
+          ]),
+        );
+      },
+    };
+
+    await run(dir, input, engine);
+
+    assert.deepEqual(read(fr), { items: ['DONE', ''] });
+  });
+});
+
 describe('translate — a corrupt file is an error, not an empty file', () => {
   const CONFLICT = '<<<<<<< HEAD\n{"a":"b"}\n=======\n{"a":"c"}\n>>>>>>> branch\n';
 

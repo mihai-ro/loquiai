@@ -13,6 +13,7 @@ import type {
   RunStats,
   TranslationMemory,
 } from './types.js';
+import { isUntranslated } from './untranslated.js';
 import { logger } from './utils/logger.js';
 
 export interface TranslateJobOptions {
@@ -78,20 +79,23 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
 
   const workingTargets: Record<string, FlatTranslations> = {};
   const keysToTranslatePerLocale: Record<string, FlatTranslations> = {};
-  // workingTargets starts as a copy of the existing targets, so a value there does not
-  // say it was translated this run. Delivery is tracked on its own: the engine produced
+  // workingTargets starts from the existing targets' values for keys the source still
+  // has, so a value there does not say it was translated this run. Delivery is tracked on its own: the engine produced
   // and processChunk accepted this key for this locale.
   const delivered: Record<string, Set<string>> = {};
 
   for (const locale of to) {
     const existingFlat = existing[locale] ?? {};
-    workingTargets[locale] = { ...existingFlat };
+    workingTargets[locale] = Object.fromEntries(
+      Object.entries(existingFlat).filter(([key]) => Object.hasOwn(sourceFlat, key)),
+    );
     delivered[locale] = new Set();
 
     const toTranslate: FlatTranslations = {};
     for (const [key, value] of Object.entries(sourceFlat)) {
       if (!force) {
-        const existsInTarget = key in existingFlat;
+        // A blank target is a placeholder (i18next-parser writes one per new key), not a translation.
+        const existsInTarget = key in existingFlat && !isUntranslated(value, existingFlat[key]);
         const previousHash = hashStore[key];
         const sourceChanged = previousHash !== undefined && previousHash !== currentSourceHashes[key];
         if (existsInTarget && !sourceChanged) continue;
@@ -137,7 +141,8 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     memoryKeys[key] = hash;
     // A locale is active because of some key; that does not make every key its own.
     const localesNeeding = activeLocales.filter((locale) => key in keysToTranslatePerLocale[locale]);
-    const cached = lookupTranslationMemory(translationMemory, hash, localesNeeding);
+    // --force asks for fresh translations; what memory holds is replaced, not served.
+    const cached = force ? null : lookupTranslationMemory(translationMemory, hash, localesNeeding);
 
     if (cached) tmCache[key] = cached;
     // a partial hit still leaves the uncovered locales to the engine

@@ -190,28 +190,48 @@ describe('flatten / unflatten roundtrip', () => {
 });
 
 describe('withStrings', () => {
-  test('a null in the target file does not replace a string the source now defines', () => {
-    const doc = withStrings(flatten({ title: 'Hello' }), { title: 'Bonjour' }, flatten({ title: null }));
-
-    assertLoose.deepEqual(unflatten(doc), { title: 'Bonjour' });
-  });
-
-  test('a number in the target file does not come back where the source holds a string', () => {
-    const doc = withStrings(flatten({ count: 'Many' }), { count: 'Beaucoup' }, flatten({ count: 3 }));
-
-    assertLoose.deepEqual(unflatten(doc), { count: 'Beaucoup' });
-  });
-
-  test('an untranslated source string is left absent, not filled from a stale target leaf', () => {
-    const doc = withStrings(flatten({ title: 'Hello' }), {}, flatten({ title: null }));
+  test('an untranslated source string is left absent', () => {
+    const doc = withStrings(flatten({ title: 'Hello' }), {});
 
     assertLoose.deepEqual(unflatten(doc), {});
   });
 
-  test('still carries a target value at a path the source does not define', () => {
-    const doc = withStrings(flatten({ title: 'Hello' }), { title: 'Bonjour' }, flatten({ extra: null }));
+  test('takes non-string leaves and array shape from the source alone', () => {
+    const doc = withStrings(flatten({ count: 3, xs: ['a', 'b'] }), { 'xs.0': 'A', 'xs.1': 'B' });
 
-    assertLoose.deepEqual(unflatten(doc), { title: 'Bonjour', extra: null });
+    assertLoose.deepEqual(unflatten(doc), { count: 3, xs: ['A', 'B'] });
+  });
+});
+
+describe('withStrings — arrays keep their shape', () => {
+  const write = (source: Record<string, unknown>, strings: Record<string, string>) =>
+    unflatten(withStrings(flatten(source), strings));
+
+  test('an untranslated element of an array of strings is written as an empty string', () => {
+    assertLoose.deepEqual(write({ items: ['a', 'b', 'c'] }, { 'items.0': 'A', 'items.2': 'C' }), {
+      items: ['A', '', 'C'],
+    });
+  });
+
+  test('a missing last element is still written', () => {
+    assertLoose.deepEqual(write({ items: ['a', 'b'] }, { 'items.0': 'A' }), { items: ['A', ''] });
+  });
+
+  test('an untranslated string inside an object in an array is written as an empty string', () => {
+    assertLoose.deepEqual(write({ steps: [{ title: 'T', body: 'B' }] }, { 'steps.0.title': 'TT' }), {
+      steps: [{ title: 'TT', body: '' }],
+    });
+  });
+
+  test('nested arrays keep their shape too', () => {
+    assertLoose.deepEqual(write({ grid: [['a', 'b'], ['c']] }, { 'grid.0.0': 'A' }), { grid: [['A', ''], ['']] });
+  });
+
+  test('a missing key outside any array stays absent', () => {
+    assertLoose.deepEqual(write({ a: 'x', b: 'y', items: ['p'] }, { a: 'X', 'items.0': 'P' }), {
+      a: 'X',
+      items: ['P'],
+    });
   });
 });
 

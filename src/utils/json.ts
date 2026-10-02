@@ -139,22 +139,30 @@ export function unflatten(doc: FlatDocument): Record<string, unknown> {
  * Builds a document whose translatable strings are `strings` but whose structure and
  * non-string leaves come from `source`. Used to serialize a target locale: only the
  * strings were translated, so everything else must mirror the source it came from.
- * `base` supplies whatever the existing target file had that the source does not.
+ * Nothing the existing target file held is carried over: a target holds exactly the
+ * source's keys. Strings inside arrays that have no translation are written empty.
  */
-export function withStrings(source: FlatDocument, strings: FlatTranslations, base?: FlatDocument): FlatDocument {
-  // A leaf the target file kept from an older source shape (a null, a number) must not
-  // outlive the string the source now defines there: unflatten writes values after
-  // strings at the same path, so the stale leaf would replace the translation.
-  const baseValues = Object.fromEntries(
-    Object.entries(base?.values ?? {}).filter(
-      ([key]) => !Object.hasOwn(strings, key) && !Object.hasOwn(source.strings, key),
-    ),
-  );
-  return {
-    strings,
-    values: { ...baseValues, ...source.values },
-    arrayPaths: [...new Set([...(base?.arrayPaths ?? []), ...source.arrayPaths])],
-  };
+export function withStrings(source: FlatDocument, strings: FlatTranslations): FlatDocument {
+  // An array has to keep its length and element types, so a string inside one that has
+  // no translation is written empty. Outside an array an absent key is left absent: it
+  // falls back at runtime, where an empty string would not.
+  const arrays = new Set(source.arrayPaths);
+  const filled = { ...strings };
+  for (const key of Object.keys(source.strings)) {
+    if (!Object.hasOwn(filled, key) && isInsideArray(key, arrays)) filled[key] = '';
+  }
+  return { strings: filled, values: { ...source.values }, arrayPaths: [...source.arrayPaths] };
+}
+
+function isInsideArray(flatKey: string, arrayPaths: Set<string>): boolean {
+  const parts = splitFlatKey(flatKey);
+  let prefix = '';
+  for (let i = 0; i < parts.length - 1; i++) {
+    const escaped = escapeSegment(parts[i]);
+    prefix = prefix ? `${prefix}.${escaped}` : escaped;
+    if (arrayPaths.has(prefix)) return true;
+  }
+  return false;
 }
 
 /**

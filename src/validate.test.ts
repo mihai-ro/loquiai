@@ -100,4 +100,11 @@ describe('validateLocales', () => {
     assert.ok(results.some((r) => r.locale === 'de'));
     assert.ok(results.some((r) => r.locale === 'es'));
   });
+
+  test('a blank target for a source with text is missing', () => {
+    const results = validateLocales({ title: 'Hello', blank: '' }, { fr: { title: '', blank: '' } });
+
+    assert.deepEqual(results[0].missing, ['title']);
+    assert.deepEqual(results[0].ok, ['blank'], 'a blank source with a blank target is fine');
+  });
 });

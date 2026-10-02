@@ -44,6 +44,8 @@ npm install -g @mihairo/loqui   # for the CLI globally
 
 Requires **Node.js ≥ 22**.
 
+TypeScript users also need `@types/node` 22 or later installed; the type declarations refer to Node's types.
+
 ---
 
 ## Quick start
@@ -320,6 +322,16 @@ non-string is never re-translated and so would never pick up a change in the sou
 If you need a genuinely locale-specific non-string, keep it in a file loqui does not
 write.
 
+A target file holds exactly the source's keys. Keys that are no longer in the source are
+removed from it on the next run; loqui warns with the count per locale and logs each
+removed key (a dry run says what it would remove).
+
+An empty string in a target file counts as untranslated, and loqui fills it. Inside an
+array, an element that could not be translated is written as an empty string so the array
+keeps its shape, and it is retried on the next run. A translation left empty on purpose
+will be re-translated. If your i18next setup generates empty values, `returnEmptyString:
+false` makes an empty value fall back instead of showing as blank.
+
 ---
 
 ## Placeholder protection
@@ -406,6 +418,8 @@ glossary/
 The `--translation-memory` flag (formerly `--glossary`) caches whole-string translations by content hash. It is orthogonal to the terminology glossary — both can be active at the same time.
 
 A memory file written by an earlier version is ignored with a warning, and rebuilt as keys are translated.
+
+`--force` ignores the memory and overwrites it: every key goes to the engine, and the new translations replace what the memory held.
 
 ---
 

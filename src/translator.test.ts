@@ -1631,6 +1631,178 @@ describe('translateJson — translation memory does not confuse strings whose ha
   });
 });
 
+describe("translateJson — a target holds only the source's keys", () => {
+  test('keys the source no longer has are left out of the working target', async () => {
+    const { translations } = await translateJson({
+      sourceFlat: { a: 'A' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { a: 'A-FR', stale: 'old', 'nested.gone': 'x' } },
+      engine: makeEngine(),
+    });
+
+    assert.deepEqual(translations.fr, { a: 'A-FR' });
+  });
+
+  test('a source key restructured from an object to a string is translated once', async () => {
+    const { translations } = await translateJson({
+      sourceFlat: { a: 'x' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { 'a.b': 'ancien' } },
+      engine: makeEngine(),
+    });
+
+    assert.deepEqual(translations.fr, { a: 'X' });
+  });
+
+  test('a run with nothing to translate still returns the pruned target', async () => {
+    const { translations, stats } = await translateJson({
+      sourceFlat: { a: 'A' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { a: 'A-FR', stale: 'old' } },
+      engine: makeEngine(),
+    });
+
+    assert.equal(stats.apiRequests, 0);
+    assert.deepEqual(translations.fr, { a: 'A-FR' });
+  });
+});
+
+describe('translateJson — a blank target means not translated yet', () => {
+  function recordingEngine(sent: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        sent.push(...Object.keys(chunk.keys));
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            { keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])) },
+          ]),
+        );
+      },
+    };
+  }
+
+  test('a key whose target is blank is sent like a missing one', async () => {
+    const sent: string[] = [];
+
+    const { translations } = await translateJson({
+      sourceFlat: { title: 'Hello' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { title: '' } },
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, ['title']);
+    assert.equal(translations.fr.title, 'HELLO');
+  });
+
+  test('a blank source with a blank target needs nothing', async () => {
+    const sent: string[] = [];
+
+    await translateJson({
+      sourceFlat: { blank: '' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { blank: '' } },
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, []);
+  });
+
+  test('a blank target is not recorded as done until it has been translated', async () => {
+    const { updatedHashStore } = await translateJson({
+      sourceFlat: { title: 'Hello' },
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      existing: { fr: { title: '' } },
+      engine: {
+        async translateChunk() {
+          return { fr: { keys: { title: '' } } };
+        },
+      },
+    });
+
+    assert.ok(!('title' in updatedHashStore));
+  });
+});
+
+describe('translateJson — --force and translation memory', () => {
+  const sourceFlat = { one: 'One', two: 'Two', blank: '' };
+  const remembered = () => ({
+    [memoryKey('One')]: { fr: 'UN-FROM-MEMORY' },
+    [memoryKey('Two')]: { fr: 'DEUX-FROM-MEMORY' },
+  });
+
+  function recordingEngine(sent: string[]): EngineAdapter {
+    return {
+      async translateChunk(chunk, targetLocales) {
+        sent.push(...Object.keys(chunk.keys));
+        return Object.fromEntries(
+          targetLocales.map((l) => [
+            l,
+            { keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, `NEW-${v}`])) },
+          ]),
+        );
+      },
+    };
+  }
+
+  test('without force, a memory that holds every string makes no request', async () => {
+    const sent: string[] = [];
+
+    const { translations } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      translationMemory: remembered(),
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent, []);
+    assert.equal(translations.fr.one, 'UN-FROM-MEMORY');
+  });
+
+  test('with force, every non-blank key goes to the engine and the memory entries are replaced', async () => {
+    const sent: string[] = [];
+
+    const { translations, updatedTranslationMemory } = await translateJson({
+      sourceFlat,
+      from: 'en',
+      to: ['fr'],
+      namespace: 'test',
+      config,
+      force: true,
+      translationMemory: remembered(),
+      engine: recordingEngine(sent),
+    });
+
+    assert.deepEqual(sent.sort(), ['one', 'two']);
+    assert.equal(translations.fr.one, 'NEW-One');
+    assert.equal(translations.fr.blank, '', 'a blank value is still copied, not sent');
+    assert.deepEqual(updatedTranslationMemory[memoryKey('One')], { fr: 'NEW-One' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Two')], { fr: 'NEW-Two' });
+  });
+});
+
 describe('translateJson — per-locale key isolation', () => {
   const sourceFlat = { alpha: 'Alpha', beta: 'Beta' };
   // de already has alpha, hand-written; it is active only because beta is missing.

@@ -13,7 +13,7 @@ describe('validateLocales', () => {
       fr: { greeting: 'bonjour', farewell: 'au revoir' },
     };
 
-    const results = validateLocales(source, existing);
+    const results = validateLocales(source, existing, Object.keys(existing));
 
     assert.equal(results.length, 1);
     const fr = results.find((r) => r.locale === 'fr') as ValidationResult;
@@ -32,7 +32,7 @@ describe('validateLocales', () => {
       fr: { greeting: 'bonjour' },
     };
 
-    const results = validateLocales(source, existing);
+    const results = validateLocales(source, existing, Object.keys(existing));
 
     const fr = results.find((r) => r.locale === 'fr') as ValidationResult;
     assert.equal(fr.missing.length, 2);
@@ -52,7 +52,7 @@ describe('validateLocales', () => {
       },
     };
 
-    const results = validateLocales(source, existing);
+    const results = validateLocales(source, existing, Object.keys(existing));
 
     const fr = results.find((r) => r.locale === 'fr') as ValidationResult;
     assert.equal(fr.missing.length, 0);
@@ -73,7 +73,7 @@ describe('validateLocales', () => {
       },
     };
 
-    const results = validateLocales(source, existing);
+    const results = validateLocales(source, existing, Object.keys(existing));
 
     const fr = results.find((r) => r.locale === 'fr') as ValidationResult;
     assert.equal(fr.missing.length, 2);
@@ -93,7 +93,7 @@ describe('validateLocales', () => {
       es: { greeting: 'hola' },
     };
 
-    const results = validateLocales(source, existing);
+    const results = validateLocales(source, existing, Object.keys(existing));
 
     assert.equal(results.length, 3);
     assert.ok(results.some((r) => r.locale === 'fr'));
@@ -102,7 +102,7 @@ describe('validateLocales', () => {
   });
 
   test('a blank target for a source with text is missing', () => {
-    const results = validateLocales({ title: 'Hello', blank: '' }, { fr: { title: '', blank: '' } });
+    const results = validateLocales({ title: 'Hello', blank: '' }, { fr: { title: '', blank: '' } }, ['fr']);
 
     assert.deepEqual(results[0].missing, ['title']);
     assert.deepEqual(results[0].ok, ['blank'], 'a blank source with a blank target is fine');

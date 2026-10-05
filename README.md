@@ -279,7 +279,8 @@ if (broken.length > 0) process.exitCode = 1; // yours to decide
 ```
 
 `InspectOptions` are `input`, `to`, `output` (the target files to inspect), `hashFile`,
-`config` and `configPath`. A locale without a target file is absent from the results.
+`config` and `configPath`. A locale without a target file comes back with `fileMissing: true` and
+every key under `missing`; an `output` record without a path for a target locale is rejected.
 `translate()` rejects a call that still passes `diff` or `validate` with `INVALID_CONFIG`,
 before it reads a file or calls an engine.
 
@@ -365,6 +366,8 @@ try {
 | `translateObject({ hashes: { key: hash } })`                | `hashes: { es: { key: hash } }`                      |
 | CLI: several locales as JSON strings inside JSON            | one JSON document                                    |
 | CLI: `--diff` / `--validate` report on stderr               | on stdout                                            |
+| CLI: `--validate` without `--output` warns and exits `0`   | exits `11` (`INVALID_USAGE`)                         |
+| `validate()` leaves out a locale with no target file        | reports it with `fileMissing: true`, every key missing |
 
 ---
 
@@ -546,7 +549,7 @@ loqui --input en.json --to es,de --output ./i18n/{locale}.json --validate
 `--diff` reports **changed** by comparing the current source against the hashes
 recorded by a previous run, so it needs the hash sidecar. Without one it says so and
 reports nothing as changed — there is no record of what the source used to be.
-`--validate` exits `1` when a target locale has missing or extra keys.
+`--validate` exits `1` when a target locale has missing or extra keys, or no file at all.
 
 ---
 

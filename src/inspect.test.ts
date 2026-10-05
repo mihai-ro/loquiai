@@ -100,10 +100,39 @@ describe('validate()', () => {
     assert.deepEqual(results[0].ok, ['a']);
   });
 
-  test('returns nothing when there are no target files', () => {
-    const p = project({ a: 'Hello' });
+  test('fails a locale with no target file, with every key missing', () => {
+    const p = project({ a: 'Hello', b: '' }, { es: { a: 'Hola', b: '' } });
 
-    assert.deepEqual(validate({ input: p.input, to: ['es', 'pt'], output: p.output, configPath: root }), []);
+    const results = validate({ input: p.input, to: ['es', 'pt'], output: p.output, configPath: root });
+
+    assert.deepEqual(
+      results.map(({ locale, fileMissing, missing }) => ({ locale, fileMissing, missing })),
+      [
+        { locale: 'es', fileMissing: false, missing: [] },
+        { locale: 'pt', fileMissing: true, missing: ['a', 'b'] },
+      ],
+    );
+  });
+
+  test('rejects an output record without a path for a target locale as INVALID_CONFIG', () => {
+    const p = project({ a: 'Hello' }, { es: { a: 'Hola' } });
+
+    assert.throws(
+      () =>
+        validate({ input: p.input, to: ['es', 'pt'], output: { es: path.join(p.dir, 'es.json') }, configPath: root }),
+      (err: unknown) => (err as { code?: string }).code === 'INVALID_CONFIG' && /\bpt\b/.test((err as Error).message),
+    );
+  });
+
+  test('rejects a call with no output as INVALID_CONFIG', () => {
+    const p = project({ a: 'Hello' });
+    // a JavaScript caller can leave out the field the types require
+    const options = { input: p.input, to: ['es'], configPath: root } as unknown as Parameters<typeof validate>[0];
+
+    assert.throws(
+      () => validate(options),
+      (err: unknown) => (err as { code?: string }).code === 'INVALID_CONFIG' && /'output'/.test((err as Error).message),
+    );
   });
 
   test('does not read the hash sidecar, so a corrupt one cannot fail it', () => {

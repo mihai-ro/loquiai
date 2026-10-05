@@ -92,11 +92,9 @@ export async function main({ stdin = process.stdin, stdout = process.stdout }: C
       }
       stdout.write(formatDiffReport(results));
     } else {
+      // Without target files there is nothing to check, and a gate that passes anyway is no gate.
+      if (!args.output) throw new LoquiError('INVALID_USAGE', '--validate needs --output: the target files to check.');
       const results = validate(inspect);
-      if (results.length === 0) {
-        stderrLogger('warn', 'No existing translation files found to validate.');
-        return;
-      }
       stdout.write(formatValidateReport(results));
       if (results.some((r) => r.missing.length > 0 || r.extra.length > 0)) process.exitCode = 1;
     }

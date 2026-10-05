@@ -129,15 +129,45 @@ describe('main — stream separation', () => {
     assert.doesNotMatch(streams.err, /\[fr\]|Summary:/);
   });
 
-  test('--validate with no existing locale files warns on stderr only', async () => {
-    const streams = await captureStreams(async (stdout) => {
-      await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--validate', '--config', tmpDir], () =>
-        main({ stdout }),
-      );
-    });
+  test('--validate without --output rejects with INVALID_USAGE', async () => {
+    await assert.rejects(
+      withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--validate', '--config', tmpDir], () => main()),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && /--output/.test(err.message),
+    );
+  });
 
-    assert.equal(streams.out, '');
-    assert.match(streams.err, /No existing translation files found to validate/);
+  test('--validate fails a locale whose target file does not exist', async () => {
+    const dir = path.join(tmpDir, 'validate-no-file');
+    fs.mkdirSync(dir, { recursive: true });
+    const realExitCode = process.exitCode;
+
+    try {
+      const streams = await captureStreams(async (stdout) => {
+        await withArgv(
+          [
+            '{"a":"x","b":"z"}',
+            '--from',
+            'en',
+            '--to',
+            'fr',
+            '--validate',
+            '--output',
+            path.join(dir, '{locale}.json'),
+            '--config',
+            tmpDir,
+          ],
+          () => main({ stdout }),
+        );
+      });
+
+      assert.equal(process.exitCode, 1);
+      assert.equal(
+        streams.out,
+        ' [fr]\n   ✗ no target file: all 2 key(s) missing\n Summary: 2 missing, 0 extra, 0 ok\n',
+      );
+    } finally {
+      process.exitCode = realExitCode;
+    }
   });
 
   test('--output reports the files it wrote on stderr instead of dumping JSON', async () => {

@@ -71,7 +71,8 @@ export function formatValidateReport(results: ValidationResult[]): string {
   let totalOk = 0;
   for (const r of results) {
     text += reportLine(`[${r.locale}]`);
-    for (const key of r.missing) text += reportLine(`  ✗ missing: ${key}`);
+    if (r.fileMissing) text += reportLine(`  ✗ no target file: all ${r.missing.length} key(s) missing`);
+    else for (const key of r.missing) text += reportLine(`  ✗ missing: ${key}`);
     for (const key of r.extra) text += reportLine(`  ✗ extra: ${key}`);
     totalMissing += r.missing.length;
     totalExtra += r.extra.length;

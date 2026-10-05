@@ -4,7 +4,15 @@ import { type FailedRunResult, LoquiError } from './errors.js';
 import { buildGlossaryModel } from './glossary.js';
 import { loadHashStore, saveHashStore } from './hasher.js';
 import type { TranslateOptions } from './lib.js';
-import { loadExisting, loadSource, resolveConfig, resolveOutputPaths, resolveTargets, sidecarPath } from './project.js';
+import {
+  assertEveryLocaleMapped,
+  loadExisting,
+  loadSource,
+  resolveConfig,
+  resolveOutputPaths,
+  resolveTargets,
+  sidecarPath,
+} from './project.js';
 import { runObject } from './translate-object.js';
 import { loadTranslationMemory, saveTranslationMemory } from './translation-memory.js';
 import type { LocaleHashes, ObjectRun, TranslateResult, TranslationMemory } from './types.js';
@@ -37,17 +45,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
 
   const outputPaths = resolveOutputPaths(options.output, to);
-  // A locale with no path would be translated and billed, then never written. Checked
-  // here and not in resolveOutputPaths: the CLI's --diff/--validate call that with `{}`.
-  if (outputPaths) {
-    const unmapped = to.filter((locale) => !Object.hasOwn(outputPaths, locale));
-    if (unmapped.length > 0) {
-      throw new LoquiError(
-        'INVALID_CONFIG',
-        `'output' has no path for target locale(s): ${unmapped.join(', ')}. Add one for each, or use a '{locale}' template.`,
-      );
-    }
-  }
+  if (outputPaths) assertEveryLocaleMapped(outputPaths, to);
   // existing translations, for missing-key detection
   const existing = loadExisting(outputPaths, to);
 

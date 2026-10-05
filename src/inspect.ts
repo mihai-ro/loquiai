@@ -1,6 +1,8 @@
 import { type DiffResult, diffLocales } from './diff.js';
+import { LoquiError } from './errors.js';
 import { loadHashStore } from './hasher.js';
 import {
+  assertEveryLocaleMapped,
   loadExisting,
   loadSource,
   type OutputOption,
@@ -46,8 +48,9 @@ function load(options: InspectOptions) {
   const config = resolveConfig(options.configPath, options.config);
   const to = resolveTargets(options.to, config);
   const { inputPath, sourceFlat } = loadSource(options.input, config);
-  const existing = loadExisting(resolveOutputPaths(options.output, to), to);
-  return { inputPath, to, sourceFlat, existing: stringsOf(existing) };
+  const outputPaths = resolveOutputPaths(options.output, to);
+  const existing = loadExisting(outputPaths, to);
+  return { inputPath, to, sourceFlat, outputPaths, existing: stringsOf(existing) };
 }
 
 /**
@@ -66,10 +69,14 @@ export function diff(options: InspectOptions): DiffReport {
 }
 
 /**
- * Checks that each target file holds exactly the source's keys. A locale with no file is
- * absent from the result. Only reads: the caller decides what a mismatch means.
+ * Checks that each target file holds exactly the source's keys. A locale with no file
+ * fails with `fileMissing` and every key missing: a gate that skipped it would pass a
+ * project that ships without that locale. Only reads: the caller decides what a mismatch means.
  */
 export function validate(options: InspectOptions): ValidationResult[] {
-  const { sourceFlat, existing } = load(options);
-  return validateLocales(sourceFlat, existing);
+  const { to, sourceFlat, outputPaths, existing } = load(options);
+  if (!outputPaths)
+    throw new LoquiError('INVALID_CONFIG', "'output' is required: it names the target files to validate.");
+  assertEveryLocaleMapped(outputPaths, to);
+  return validateLocales(sourceFlat, existing, to);
 }

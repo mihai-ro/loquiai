@@ -84,6 +84,20 @@ export function resolveOutputPaths(output: OutputOption | undefined, to: string[
   return Object.fromEntries(to.map((locale) => [locale, path.join(output, `${locale}.json`)]));
 }
 
+/**
+ * Every target locale needs a path. One left out of an output record would be skipped
+ * without a word: billed and never written by `translate()`, never checked by `validate()`.
+ */
+export function assertEveryLocaleMapped(outputPaths: Record<string, string>, to: string[]): void {
+  const unmapped = to.filter((locale) => !Object.hasOwn(outputPaths, locale));
+  if (unmapped.length > 0) {
+    throw new LoquiError(
+      'INVALID_CONFIG',
+      `'output' has no path for target locale(s): ${unmapped.join(', ')}. Add one for each, or use a '{locale}' template.`,
+    );
+  }
+}
+
 /** The target files that exist, parsed. A locale without a file is absent. */
 export function loadExisting(outputPaths: Record<string, string> | null, to: string[]): Record<string, JsonObject> {
   const existing: Record<string, JsonObject> = {};

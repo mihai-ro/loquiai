@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadConfig, validateConfig } from './config.js';
+import { loadConfig, validateConfig, validateTargets } from './config.js';
 import { LoquiError } from './errors.js';
 import type { FlatTranslations, JsonObject, LoquiConfig } from './types.js';
 import { flatten, readJson } from './utils/json.js';
@@ -30,7 +30,9 @@ export function resolveTargets(to: string | string[] | undefined, config: LoquiC
   if (!raw || (Array.isArray(raw) && raw.length === 0)) {
     throw new LoquiError('INVALID_CONFIG', "'to' (target locale(s)) is required. Set it in options or config.");
   }
-  return Array.isArray(raw) ? raw : raw.split(',').map((s) => s.trim());
+  const targets = Array.isArray(raw) ? raw : raw.split(',').map((s) => s.trim());
+  validateTargets(targets);
+  return targets;
 }
 
 export interface LoadedSource {

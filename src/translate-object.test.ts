@@ -110,6 +110,18 @@ describe('translateObject — config', () => {
     );
   });
 
+  test('a __proto__ target locale rejects instead of vanishing from the result', async () => {
+    let called = false;
+    await assert.rejects(
+      translateObject(
+        { a: 'Hello' },
+        { from: 'en', to: ['es', '__proto__'], engine: makeEngine(() => (called = true)) },
+      ),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_CONFIG' && err.result === undefined,
+    );
+    assert.equal(called, false);
+  });
+
   test('a partial config still runs on the defaults', async () => {
     const chunks: number[] = [];
     const run = await translateObject(

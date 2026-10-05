@@ -1,4 +1,4 @@
-import { validateConfig } from './config.js';
+import { validateConfig, validateTargets } from './config.js';
 import { LoquiError } from './errors.js';
 import { translateJson } from './translator.js';
 import {
@@ -62,6 +62,7 @@ export async function runObject(
 ): Promise<ObjectRun> {
   const config: LoquiConfig = { ...CONFIG_DEFAULTS, ...options.config };
   validateConfig(config, 'config');
+  validateTargets(options.to);
 
   const namespace = options.namespace ?? 'translation';
   const sourceDoc = flatten(source);

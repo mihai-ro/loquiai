@@ -89,6 +89,13 @@ describe('translate — basic functionality', () => {
     );
   });
 
+  test('throws on a __proto__ target locale', async () => {
+    await assert.rejects(
+      () => translate({ input: '{"greeting":"hello"}', from: 'en', to: '__proto__', engine: makeEngine() }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_CONFIG',
+    );
+  });
+
   test('throws when to locales are missing', async () => {
     await assert.rejects(
       () =>

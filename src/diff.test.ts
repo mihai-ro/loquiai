@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { type DiffResult, diffLocales } from './diff.js';
 import { hashValue } from './hasher.js';
+import type { LocaleHashes } from './types.js';
 
-/** The sidecar as it would look after a run over `source`. */
-function hashesFor(source: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(source).map(([k, v]) => [k, hashValue(v)]));
+/** The sidecar as it would look after a run over `source` that delivered `fr`. */
+function hashesFor(source: Record<string, string>): LocaleHashes {
+  return { fr: Object.fromEntries(Object.entries(source).map(([k, v]) => [k, hashValue(v)])) };
 }
 
 describe('diffLocales', () => {
@@ -40,7 +41,7 @@ describe('diffLocales', () => {
   test('mixed changes', () => {
     const source = { 'a.key': 'new value', 'b.key': 'also new' };
     // the sidecar remembers a.key as it was before this edit
-    const hashStore = { 'a.key': hashValue('old source'), 'b.key': hashValue('also new') };
+    const hashStore = { fr: { 'a.key': hashValue('old source'), 'b.key': hashValue('also new') } };
     const existing = {
       fr: { 'a.key': 'ancienne valeur', 'c.key': 'removed key', 'd.key': 'stays same' },
     };
@@ -105,7 +106,7 @@ describe('diffLocales', () => {
   test('detects changed when the source text moved since the last run', () => {
     const source = { key: 'hello there' };
     const existing = { fr: { key: 'bonjour' } };
-    const hashStore = { key: hashValue('hello') };
+    const hashStore = { fr: { key: hashValue('hello') } };
 
     const results = diffLocales(source, existing, hashStore);
 
@@ -127,7 +128,7 @@ describe('diffLocales', () => {
     const source = { known: 'a', fresh: 'b' };
     const existing = { fr: { known: 'A', fresh: 'B' } };
 
-    const results = diffLocales(source, existing, { known: hashValue('a') });
+    const results = diffLocales(source, existing, { fr: { known: hashValue('a') } });
 
     assert.deepEqual(results[0].changed, []);
     assert.deepEqual(results[0].unchanged.sort(), ['fresh', 'known']);

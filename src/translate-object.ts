@@ -6,8 +6,8 @@ import {
   type EngineAdapter,
   type FlatDocument,
   type GlossaryModel,
-  type HashStore,
   type JsonObject,
+  type LocaleHashes,
   type LoquiConfig,
   type ObjectRun,
   type TranslationMemory,
@@ -22,8 +22,12 @@ export interface TranslateObjectOptions {
   config?: Partial<LoquiConfig>;
   /** Existing target documents by locale. Keys they already translate are not sent again. */
   existing?: Record<string, JsonObject>;
-  /** Source hashes from the last run. Passing them (even `{}`) turns incremental on. */
-  hashes?: HashStore;
+  /**
+   * Source hashes from the last run, by locale. Passing them (even `{}`) turns incremental on.
+   * A locale's hash for a key is recorded only once that locale holds the new value, so a
+   * locale delivered in another run, or not at all, is not marked done.
+   */
+  hashes?: LocaleHashes;
   /** Whole-string translations from earlier runs. Passing it turns translation memory on. */
   memory?: TranslationMemory;
   /** Resolved glossary terms and the do-not-translate list. */

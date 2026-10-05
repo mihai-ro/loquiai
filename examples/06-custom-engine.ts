@@ -12,13 +12,10 @@
  *   npx ts-node examples/06-custom-engine.ts
  */
 
-import { translate, EngineAdapter, TranslationChunk, TranslationResult } from '@mihairo/loqui';
+import { translate, EngineAdapter, TranslateChunkRequest, TranslationResult } from '@mihairo/loqui';
 
 const mockEngine: EngineAdapter = {
-  async translateChunk(
-    chunk: TranslationChunk,
-    targetLocales: string[],
-  ): Promise<Record<string, TranslationResult>> {
+  async translateChunk({ chunk, targetLocales }: TranslateChunkRequest): Promise<Record<string, TranslationResult>> {
     const result: Record<string, TranslationResult> = {};
     for (const locale of targetLocales) {
       const keys: Record<string, string> = {};

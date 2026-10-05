@@ -1,8 +1,25 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { LoquiError } from '../errors.js';
-import { CONFIG_DEFAULTS } from '../types.js';
+import { CONFIG_DEFAULTS, type TranslateChunkRequest, type TranslationChunk } from '../types.js';
 import { buildGeminiResponseSchema, GeminiEngine } from './gemini.engine.js';
+
+/** A request for one call, with a silent log. `extra` overrides any field. */
+function req(
+  chunk: TranslationChunk,
+  targetLocales: string[],
+  extra: Partial<TranslateChunkRequest> = {},
+): TranslateChunkRequest {
+  return {
+    chunk,
+    targetLocales,
+    sourceLocale: 'en',
+    namespace: 'test',
+    log: () => {},
+    onRateLimited: () => {},
+    ...extra,
+  };
+}
 
 const FAKE_KEY = 'gsk_test-gemini-key';
 const mockChunk = { keys: { greeting: 'Hello', farewell: 'Goodbye' } };
@@ -43,7 +60,7 @@ describe('GeminiEngine', () => {
       return new Response(successBody);
     });
 
-    await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(capturedUrl, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent');
   });
 
@@ -55,7 +72,7 @@ describe('GeminiEngine', () => {
       return new Response(successBody);
     });
 
-    await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(capturedKey, FAKE_KEY);
   });
 
@@ -63,7 +80,7 @@ describe('GeminiEngine', () => {
     const engine = new GeminiEngine({ ...CONFIG_DEFAULTS, engine: 'gemini' });
     engine._setFetch(mockFetch(successBody));
 
-    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    const result = await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(result.fr.keys.greeting, 'Bonjour');
     assert.equal(result.fr.keys.farewell, 'Au revoir');
   });
@@ -73,7 +90,7 @@ describe('GeminiEngine', () => {
     engine._setFetch(mockFetch(JSON.stringify({ candidates: [] })));
 
     await assert.rejects(
-      () => engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      () => engine.translateChunk(req(mockChunk, ['fr'])),
       (err: unknown) =>
         err instanceof LoquiError && err.code === 'INVALID_RESPONSE' && err.message.includes('empty response'),
     );
@@ -117,7 +134,7 @@ describe('GeminiEngine', () => {
       );
     });
 
-    await engine.translateChunk(largeChunk, manyLocales, 'en', 'test');
+    await engine.translateChunk(req(largeChunk, manyLocales));
     const genConfig = capturedBody.generationConfig as Record<string, unknown>;
     assert.ok(!('responseSchema' in genConfig), 'responseSchema must be absent above size limit');
     assert.equal(genConfig.responseMimeType, 'application/json');
@@ -131,7 +148,7 @@ describe('GeminiEngine', () => {
       return new Response(successBody);
     });
 
-    await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    await engine.translateChunk(req(mockChunk, ['fr']));
     const genConfig = capturedBody.generationConfig as Record<string, unknown>;
     assert.ok('responseSchema' in genConfig, 'responseSchema must be present within size limit');
   });
@@ -190,7 +207,7 @@ describe('GeminiEngine — truncated response', () => {
     );
 
     await assert.rejects(
-      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      engine.translateChunk(req(mockChunk, ['fr'])),
       (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED',
     );
   });
@@ -210,7 +227,7 @@ describe('GeminiEngine — truncated response', () => {
       ),
     );
 
-    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    const result = await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(result.fr.keys.greeting, 'Bonjour');
   });
 });
@@ -228,7 +245,7 @@ describe('GeminiEngine — a body that is not JSON', () => {
     engine._setFetch(mockFetch('<html>proxy error</html>'));
 
     await assert.rejects(
-      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      engine.translateChunk(req(mockChunk, ['fr'])),
       (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_RESPONSE',
     );
   });
@@ -264,7 +281,7 @@ describe('GeminiEngine — a 429 that says how long to wait', () => {
       },
     );
 
-    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    const result = await engine.translateChunk(req(mockChunk, ['fr']));
 
     assert.deepEqual(sleeps, [12_500]);
     assert.equal(result.fr.keys.greeting, 'Bonjour');

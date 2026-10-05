@@ -46,7 +46,7 @@ function buildSource() {
 /** Resolves at once and echoes each value per locale, counting what it was asked for. */
 function makeEngine(counts) {
   return {
-    async translateChunk(chunk, locales) {
+    async translateChunk({ chunk, targetLocales: locales }) {
       counts.requests++;
       counts.values += Object.keys(chunk.keys).length * locales.length;
       const result = {};

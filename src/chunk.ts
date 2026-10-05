@@ -8,6 +8,7 @@ import type {
   GlossaryModel,
   LoquiConfig,
   RunStats,
+  TranslateChunkRequest,
   TranslationChunk,
   TranslationResult,
 } from './types.js';
@@ -32,6 +33,8 @@ interface ProcessChunkOptions {
   stats: RunStats;
   /** the run's log: a `warn` through it is also recorded in `stats.warnings`. */
   log: LogFn;
+  /** narrows this run's concurrency pool; handed to the engine with each request. */
+  onRateLimited: () => void;
   glossaryModel?: GlossaryModel;
 }
 
@@ -54,6 +57,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
     config,
     stats,
     log,
+    onRateLimited,
     glossaryModel,
   } = opts;
 
@@ -141,11 +145,20 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
     const sent: TranslationChunk = { keys: Object.fromEntries(keys.map((key) => [key, maskedChunk.keys[key]])) };
     let results: Record<string, TranslationResult>;
     try {
-      results = await engine.translateChunk(sent, locales, from, namespace, glossaryBlock);
+      const request: TranslateChunkRequest = {
+        chunk: sent,
+        targetLocales: locales,
+        sourceLocale: from,
+        namespace,
+        glossaryBlock,
+        log,
+        onRateLimited,
+      };
+      results = await engine.translateChunk(request);
       stats.apiRequests++;
 
       if (config.review && engine.reviewChunk) {
-        results = await engine.reviewChunk(sent, results, locales, from, namespace, glossaryBlock);
+        results = await engine.reviewChunk({ ...request, initial: results });
         stats.apiRequests++;
       }
     } catch (err) {

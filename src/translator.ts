@@ -2,13 +2,14 @@ import { chunkTranslations, processChunk } from './chunk.js';
 import { ConcurrencyPool } from './concurrency-pool.js';
 import { createEngine } from './engines/factory.js';
 import { LoquiError } from './errors.js';
-import { buildUpdatedHashStore, hashValue } from './hasher.js';
+import { buildUpdatedHashes, hashValue, localeStore } from './hasher.js';
 import { lookupTranslationMemory, memoryKey, updateTranslationMemory } from './translation-memory.js';
 import type {
   EngineAdapter,
   FlatTranslations,
   GlossaryModel,
   HashStore,
+  LocaleHashes,
   LoquiConfig,
   RunStats,
   TranslationMemory,
@@ -23,7 +24,7 @@ export interface TranslateJobOptions {
   namespace: string;
   config: LoquiConfig;
   existing?: Record<string, FlatTranslations>;
-  hashStore?: HashStore;
+  hashStore?: LocaleHashes;
   translationMemory?: TranslationMemory;
   glossaryModel?: GlossaryModel;
   force?: boolean;
@@ -37,7 +38,7 @@ export interface TranslateJobOptions {
 
 export interface TranslateJobResult {
   translations: Record<string, FlatTranslations>;
-  updatedHashStore: HashStore;
+  updatedHashStore: LocaleHashes;
   updatedTranslationMemory: TranslationMemory;
   stats: RunStats;
   /**
@@ -114,12 +115,13 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     );
     delivered[locale] = new Set();
 
+    const localeHashes = localeStore(hashStore, locale) ?? {};
     const toTranslate: FlatTranslations = {};
     for (const [key, value] of Object.entries(sourceFlat)) {
       if (!force) {
         // A blank target is a placeholder (i18next-parser writes one per new key), not a translation.
-        const existsInTarget = key in existingFlat && !isUntranslated(value, existingFlat[key]);
-        const previousHash = hashStore[key];
+        const existsInTarget = Object.hasOwn(existingFlat, key) && !isUntranslated(value, existingFlat[key]);
+        const previousHash = Object.hasOwn(localeHashes, key) ? localeHashes[key] : undefined;
         const sourceChanged = previousHash !== undefined && previousHash !== currentSourceHashes[key];
         if (existsInTarget && !sourceChanged) continue;
       }
@@ -133,6 +135,15 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     }
   }
 
+  // A locale owes a key it needed and the engine has not delivered. Its hash is recorded
+  // only when it owes nothing: recording one for a key a failed chunk never delivered
+  // would make the next run skip it forever, and an existing value cannot stand in for
+  // delivery, since for a changed key it is the stale one.
+  const outstanding = (locale: string, key: string): boolean => {
+    const needed = keysToTranslatePerLocale[locale];
+    return needed !== undefined && Object.hasOwn(needed, key) && !delivered[locale].has(key);
+  };
+
   const allKeysNeeded = new Set<string>();
   for (const keys of Object.values(keysToTranslatePerLocale)) {
     for (const key in keys) allKeysNeeded.add(key);
@@ -143,7 +154,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     stats.elapsedMs = Date.now() - startTime;
     return {
       translations: workingTargets,
-      updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
+      updatedHashStore: buildUpdatedHashes(hashStore, to, currentSourceHashes, outstanding),
       updatedTranslationMemory: translationMemory,
       stats,
       log,
@@ -165,7 +176,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     const hash = memoryKey(sourceFlat[key]);
     memoryKeys[key] = hash;
     // A locale is active because of some key; that does not make every key its own.
-    const localesNeeding = activeLocales.filter((locale) => key in keysToTranslatePerLocale[locale]);
+    const localesNeeding = activeLocales.filter((locale) => Object.hasOwn(keysToTranslatePerLocale[locale], key));
     // --force asks for fresh translations; what memory holds is replaced, not served.
     const cached = force ? null : lookupTranslationMemory(translationMemory, hash, localesNeeding);
 
@@ -191,7 +202,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     stats.elapsedMs = Date.now() - startTime;
     return {
       translations: workingTargets,
-      updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
+      updatedHashStore: buildUpdatedHashes(hashStore, to, currentSourceHashes, outstanding),
       updatedTranslationMemory: translationMemory,
       stats,
       log,
@@ -202,7 +213,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   // locales share chunks, so a key one locale lacks is not paid for in every other.
   const groups = new Map<string, { locales: string[]; keys: FlatTranslations }>();
   for (const [key, value] of Object.entries(keysNeedingTranslation)) {
-    const locales = activeLocales.filter((locale) => key in keysToTranslatePerLocale[locale]);
+    const locales = activeLocales.filter((locale) => Object.hasOwn(keysToTranslatePerLocale[locale], key));
     const id = locales.join(',');
     const group = groups.get(id) ?? { locales, keys: {} };
     group.keys[key] = value;
@@ -219,12 +230,6 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   if (!dryRun) {
     const engine = await createEngine(config, opts.engine);
     const pool = new ConcurrencyPool(config.concurrency);
-
-    // Wire the rate-limit signal so 429 responses from any engine feed back into AIMD.
-    // Note: onSuccess fires once per chunk (not per request). A 429 collapses the window
-    // immediately via setRateLimitSignal; recovery ramps up one step per 10 completed chunks.
-    engine.setRateLimitSignal?.(() => pool.onRateLimited());
-    engine.setLogger?.(log);
 
     // A cut-off response is billed in full and then sent again as two. One note per run,
     // not per chunk: the cost is the same fact however many chunks it happened to.
@@ -253,6 +258,8 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
           config,
           stats,
           log,
+          // A 429 narrows this run's pool only: the engine may be shared with other runs.
+          onRateLimited: () => pool.onRateLimited(),
           glossaryModel,
         });
       } catch (err) {
@@ -291,21 +298,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     }
   }
 
-  // A key counts as done once no locale still has it outstanding. Recording a hash for
-  // a key a failed chunk never delivered would make the next run skip it forever, and
-  // an existing value cannot stand in for delivery: for a changed key it is the stale one.
-  const landedHashes: HashStore = {};
-  for (const [key, hash] of Object.entries(currentSourceHashes)) {
-    const outstanding = to.some((locale) => {
-      const needed = keysToTranslatePerLocale[locale];
-      return needed !== undefined && key in needed && !delivered[locale].has(key);
-    });
-    if (!outstanding) landedHashes[key] = hash;
-  }
-  // landedHashes is only what this run delivered; the prune has to be measured against
-  // the whole current source, or a key that failed here would be dropped and come back
-  // looking brand new.
-  const updatedHashStore = buildUpdatedHashStore(hashStore, landedHashes, Object.keys(currentSourceHashes));
+  const updatedHashStore = buildUpdatedHashes(hashStore, to, currentSourceHashes, outstanding);
 
   stats.elapsedMs = Date.now() - startTime;
   return {

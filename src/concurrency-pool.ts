@@ -7,8 +7,8 @@ import { LoquiError } from './errors.js';
  * - Increases the active window by 1 after RAMP_AFTER consecutive successes.
  * - Halves the window (floor 1) on any rate-limit signal from the engine.
  *
- * The pool integrates with EngineAdapter.setRateLimitSignal?: engines call the
- * callback when they observe a 429, which feeds directly into onRateLimited().
+ * Each run owns a pool and hands `onRateLimited` to the engine with every request:
+ * engines call it when they observe a 429, which feeds directly into onRateLimited().
  */
 export class ConcurrencyPool {
   #window: number;

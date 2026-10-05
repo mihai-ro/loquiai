@@ -1,8 +1,25 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { LoquiError } from '../errors.js';
-import { CONFIG_DEFAULTS } from '../types.js';
+import { CONFIG_DEFAULTS, type TranslateChunkRequest, type TranslationChunk } from '../types.js';
 import { buildOpenAIResponseSchema, OpenAIEngine } from './openai.engine.js';
+
+/** A request for one call, with a silent log. `extra` overrides any field. */
+function req(
+  chunk: TranslationChunk,
+  targetLocales: string[],
+  extra: Partial<TranslateChunkRequest> = {},
+): TranslateChunkRequest {
+  return {
+    chunk,
+    targetLocales,
+    sourceLocale: 'en',
+    namespace: 'test',
+    log: () => {},
+    onRateLimited: () => {},
+    ...extra,
+  };
+}
 
 const FAKE_KEY = 'sk-test-openai-key';
 const mockChunk = { keys: { title: 'Hello', body: 'World' } };
@@ -43,7 +60,7 @@ describe('OpenAIEngine', () => {
       return new Response(successBody);
     });
 
-    await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(capturedUrl, 'https://api.openai.com/v1/chat/completions');
   });
 
@@ -55,7 +72,7 @@ describe('OpenAIEngine', () => {
       return new Response(successBody);
     });
 
-    await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(capturedAuth, `Bearer ${FAKE_KEY}`);
   });
 
@@ -67,7 +84,7 @@ describe('OpenAIEngine', () => {
       return new Response(successBody);
     });
 
-    await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(capturedBody.model, 'gpt-test');
     const messages = capturedBody.messages as Array<{ role: string }>;
     assert.ok(
@@ -97,7 +114,7 @@ describe('OpenAIEngine', () => {
     // 10 locales × 10 keys = 100 > 90 limit
     const largeChunk = { keys: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`key${i}`, 'val'])) };
     const manyLocales = Array.from({ length: 10 }, (_, i) => `l${i}`);
-    await engine.translateChunk(largeChunk, manyLocales, 'en', 'test');
+    await engine.translateChunk(req(largeChunk, manyLocales));
     assert.deepEqual(capturedBody.response_format, { type: 'json_object' });
   });
 
@@ -105,7 +122,7 @@ describe('OpenAIEngine', () => {
     const engine = new OpenAIEngine({ ...CONFIG_DEFAULTS, engine: 'openai' });
     engine._setFetch(mockFetch(successBody));
 
-    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    const result = await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(result.fr.keys.title, 'Bonjour');
     assert.equal(result.fr.keys.body, 'Monde');
   });
@@ -115,7 +132,7 @@ describe('OpenAIEngine', () => {
     engine._setFetch(mockFetch(JSON.stringify({ choices: [] })));
 
     await assert.rejects(
-      () => engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      () => engine.translateChunk(req(mockChunk, ['fr'])),
       (err: unknown) =>
         err instanceof LoquiError && err.code === 'INVALID_RESPONSE' && err.message.includes('empty response'),
     );
@@ -180,7 +197,7 @@ describe('OpenAIEngine — truncated response', () => {
     );
 
     await assert.rejects(
-      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      engine.translateChunk(req(mockChunk, ['fr'])),
       (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED',
     );
   });
@@ -197,7 +214,7 @@ describe('OpenAIEngine — truncated response', () => {
     );
 
     await assert.rejects(
-      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      engine.translateChunk(req(mockChunk, ['fr'])),
       (err: unknown) => err instanceof LoquiError && err.code === 'TRUNCATED',
     );
   });
@@ -206,7 +223,7 @@ describe('OpenAIEngine — truncated response', () => {
     const engine = new OpenAIEngine({ ...CONFIG_DEFAULTS, engine: 'openai' });
     engine._setFetch(mockFetch(successBody));
 
-    const result = await engine.translateChunk(mockChunk, ['fr'], 'en', 'test');
+    const result = await engine.translateChunk(req(mockChunk, ['fr']));
     assert.equal(result.fr.keys.title, 'Bonjour');
   });
 });
@@ -224,7 +241,7 @@ describe('OpenAIEngine — a body that is not JSON', () => {
     engine._setFetch(mockFetch('<html>proxy error</html>'));
 
     await assert.rejects(
-      engine.translateChunk(mockChunk, ['fr'], 'en', 'test'),
+      engine.translateChunk(req(mockChunk, ['fr'])),
       (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_RESPONSE',
     );
   });

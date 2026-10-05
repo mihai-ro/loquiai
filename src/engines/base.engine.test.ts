@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { CONFIG_DEFAULTS, type LoquiConfig, type TranslationChunk, type TranslationResult } from '../types.js';
-import { BaseEngine } from './base.engine.js';
+import {
+  CONFIG_DEFAULTS,
+  type LoquiConfig,
+  type TranslateChunkRequest,
+  type TranslationChunk,
+  type TranslationResult,
+} from '../types.js';
+import { BaseEngine, type CallContext } from './base.engine.js';
+
+/** A request for one call, with a silent log. `extra` overrides any field. */
+function req(
+  chunk: TranslationChunk,
+  targetLocales: string[],
+  extra: Partial<TranslateChunkRequest> = {},
+): TranslateChunkRequest {
+  return {
+    chunk,
+    targetLocales,
+    sourceLocale: 'en',
+    namespace: 'ns',
+    log: () => {},
+    onRateLimited: () => {},
+    ...extra,
+  };
+}
+
+const silent: CallContext = { log: () => {}, onRateLimited: () => {} };
 
 type CallArgs = { systemPrompt: string; userPrompt: string; expectedKeys: string[]; targetLocales: string[] };
 
@@ -12,8 +37,8 @@ class TestableEngine extends BaseEngine {
     super({ ...CONFIG_DEFAULTS, ...config }, 'test-key');
   }
 
-  parseResponseForTest(raw: string, expectedKeys: string[], targetLocales: string[]) {
-    return this.parseResponse(raw, expectedKeys, targetLocales);
+  parseResponseForTest(raw: string, expectedKeys: string[], targetLocales: string[], ctx: CallContext = silent) {
+    return this.parseResponse(raw, expectedKeys, targetLocales, ctx);
   }
 
   protected async makeCall(
@@ -21,6 +46,7 @@ class TestableEngine extends BaseEngine {
     userPrompt: string,
     expectedKeys: string[],
     targetLocales: string[],
+    _ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
     this.lastCall = { systemPrompt, userPrompt, expectedKeys, targetLocales };
     return Object.fromEntries(
@@ -95,7 +121,7 @@ describe('reviewChunk', () => {
     const chunk: TranslationChunk = { keys: { greeting: 'Hello' } };
     const initial: Record<string, TranslationResult> = { fr: { keys: { greeting: 'Bonjour' } } };
 
-    await engine.reviewChunk(chunk, initial, ['fr'], 'en', 'test');
+    await engine.reviewChunk({ ...req(chunk, ['fr']), initial });
 
     const args = engine.lastCall;
     if (!args) throw new Error('makeCall must have been called');
@@ -108,7 +134,7 @@ describe('reviewChunk', () => {
 
   test('translateChunk routes through makeCall', async () => {
     const engine = new TestableEngine();
-    await engine.translateChunk({ keys: { k: 'v' } }, ['de'], 'en', 'ns');
+    await engine.translateChunk(req({ keys: { k: 'v' } }, ['de']));
     const args = engine.lastCall;
     if (!args) throw new Error('makeCall must have been called');
     assert.ok(args.userPrompt.includes('"k"'), 'user prompt must include source key');
@@ -117,7 +143,7 @@ describe('reviewChunk', () => {
   test('glossaryBlock is appended to the system prompt when provided', async () => {
     const engine = new TestableEngine();
     const block = 'Use these exact term translations (glossary):\n- "Dashboard" -> es: Tablero';
-    await engine.translateChunk({ keys: { k: 'v' } }, ['es'], 'en', 'ns', block);
+    await engine.translateChunk(req({ keys: { k: 'v' } }, ['es'], { glossaryBlock: block }));
     const args = engine.lastCall;
     if (!args) throw new Error('makeCall must have been called');
     assert.ok(args.systemPrompt.includes('Dashboard'), 'system prompt must include glossary block');
@@ -126,9 +152,9 @@ describe('reviewChunk', () => {
 
   test('empty glossaryBlock does not modify system prompt', async () => {
     const engine = new TestableEngine();
-    await engine.translateChunk({ keys: { k: 'v' } }, ['es'], 'en', 'ns');
+    await engine.translateChunk(req({ keys: { k: 'v' } }, ['es']));
     const noBlock = engine.lastCall?.systemPrompt ?? '';
-    await engine.translateChunk({ keys: { k: 'v' } }, ['es'], 'en', 'ns', '');
+    await engine.translateChunk(req({ keys: { k: 'v' } }, ['es'], { glossaryBlock: '' }));
     const emptyBlock = engine.lastCall?.systemPrompt ?? '';
     assert.equal(noBlock, emptyBlock);
   });
@@ -137,10 +163,10 @@ describe('reviewChunk', () => {
     const engine = new TestableEngine();
     const chunk: TranslationChunk = { keys: { msg: 'Hello' } };
 
-    await engine.translateChunk(chunk, ['fr'], 'en', 'ns');
+    await engine.translateChunk(req(chunk, ['fr']));
     const translatePrompt = engine.lastCall?.userPrompt ?? '';
 
-    await engine.reviewChunk(chunk, { fr: { keys: { msg: 'Salut' } } }, ['fr'], 'en', 'ns');
+    await engine.reviewChunk({ ...req(chunk, ['fr']), initial: { fr: { keys: { msg: 'Salut' } } } });
     const reviewPrompt = engine.lastCall?.userPrompt ?? '';
 
     assert.notEqual(translatePrompt, reviewPrompt);

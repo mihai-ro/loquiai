@@ -7,7 +7,7 @@ import type { TranslateOptions } from './lib.js';
 import { loadExisting, loadSource, resolveConfig, resolveOutputPaths, resolveTargets, sidecarPath } from './project.js';
 import { runObject } from './translate-object.js';
 import { loadTranslationMemory, saveTranslationMemory } from './translation-memory.js';
-import type { HashStore, ObjectRun, TranslateResult, TranslationMemory } from './types.js';
+import type { LocaleHashes, ObjectRun, TranslateResult, TranslationMemory } from './types.js';
 import { writeFileAtomic } from './utils/json.js';
 
 export async function translateFile(options: TranslateOptions): Promise<TranslateResult> {
@@ -37,13 +37,24 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
 
   const outputPaths = resolveOutputPaths(options.output, to);
+  // A locale with no path would be translated and billed, then never written. Checked
+  // here and not in resolveOutputPaths: the CLI's --diff/--validate call that with `{}`.
+  if (outputPaths) {
+    const unmapped = to.filter((locale) => !Object.hasOwn(outputPaths, locale));
+    if (unmapped.length > 0) {
+      throw new LoquiError(
+        'INVALID_CONFIG',
+        `'output' has no path for target locale(s): ${unmapped.join(', ')}. Add one for each, or use a '{locale}' template.`,
+      );
+    }
+  }
   // existing translations, for missing-key detection
   const existing = loadExisting(outputPaths, to);
 
   // Read only when the run uses it: a corrupt sidecar it never consults must not fail it.
   const useIncremental = options.incremental || Boolean(options.hashFile);
   const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
-  const hashStore: HashStore = hashFilePath && useIncremental ? loadHashStore(hashFilePath) : {};
+  const hashStore: LocaleHashes = hashFilePath && useIncremental ? loadHashStore(hashFilePath, to) : {};
 
   // load translation memory if enabled
   const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
@@ -73,7 +84,15 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
       writeFileAtomic(dest, `${JSON.stringify(doc, null, 2)}\n`);
       written[locale] = dest;
     }
-    if (useIncremental && hashFilePath) saveHashStore(hashFilePath, run.hashes);
+    // A locale's hashes move only with its file: nothing written for it means it still
+    // owes whatever it owed, whichever other locales this run delivered.
+    if (useIncremental && hashFilePath && Object.keys(written).length > 0) {
+      const saved: LocaleHashes = { ...hashStore };
+      for (const locale of Object.keys(written)) {
+        if (Object.hasOwn(run.hashes, locale)) saved[locale] = run.hashes[locale];
+      }
+      saveHashStore(hashFilePath, saved);
+    }
     if (useTranslationMemory && tmFilePath) saveTranslationMemory(tmFilePath, run.memory);
     return written;
   };

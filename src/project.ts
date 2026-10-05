@@ -77,7 +77,7 @@ export function resolveOutputPaths(output: OutputOption | undefined, to: string[
 
   // string: treat as template if it contains {locale}, otherwise as a directory
   if (output.includes('{locale}')) {
-    return Object.fromEntries(to.map((locale) => [locale, output.replace('{locale}', locale)]));
+    return Object.fromEntries(to.map((locale) => [locale, output.replaceAll('{locale}', locale)]));
   }
 
   // plain directory path: write {dir}/{locale}.json

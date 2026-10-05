@@ -12,7 +12,7 @@ import type { EngineAdapter, TranslationChunk, TranslationMemory, TranslationRes
 /** Uppercases every value, per locale. `onCall` sees each chunk before it is answered. */
 function makeEngine(onCall: (chunk: TranslationChunk, glossaryBlock?: string) => void = () => {}): EngineAdapter {
   return {
-    async translateChunk(chunk, targetLocales, _from, _namespace, glossaryBlock) {
+    async translateChunk({ chunk, targetLocales, glossaryBlock }) {
       onCall(chunk, glossaryBlock);
       const result: Record<string, TranslationResult> = {};
       for (const locale of targetLocales) {
@@ -42,7 +42,7 @@ describe('translateObject — no disk', () => {
       assert.deepEqual(run.locales.es, { a: 'HELLO', nested: { b: 'WORLD' } });
       assert.equal(run.stats.keysTranslated, 2);
       assert.deepEqual(run.removed, { es: [] });
-      assert.deepEqual(run.hashes, { a: hashValue('Hello'), 'nested.b': hashValue('World') });
+      assert.deepEqual(run.hashes, { es: { a: hashValue('Hello'), 'nested.b': hashValue('World') } });
       assert.deepEqual(run.memory[memoryKey('Hello')], { es: 'HELLO' });
       assert.equal(typeof run.locales.es, 'object');
     } finally {
@@ -206,7 +206,7 @@ describe('translateObject — hashes and memory', () => {
       {
         from: 'en',
         to: ['es'],
-        hashes: { a: hashValue('Hello') },
+        hashes: { es: { a: hashValue('Hello') } },
         existing: { es: { a: 'HELLO' } },
         engine: makeEngine((chunk) => sent.push(...Object.keys(chunk.keys))),
       },
@@ -258,9 +258,9 @@ describe('translateObject — a chunk failure', () => {
   function flakyEngine(failOn: string[]): EngineAdapter {
     const inner = makeEngine();
     return {
-      async translateChunk(chunk, ...rest) {
-        if (Object.keys(chunk.keys).some((k) => failOn.includes(k))) throw new Error('API exploded');
-        return inner.translateChunk(chunk, ...rest);
+      async translateChunk(req) {
+        if (Object.keys(req.chunk.keys).some((k) => failOn.includes(k))) throw new Error('API exploded');
+        return inner.translateChunk(req);
       },
     };
   }
@@ -287,7 +287,7 @@ describe('translateObject — a chunk failure', () => {
     assert.ok(err.result, 'no result on the error');
     assert.equal(err.result.locales.es.keep, KEEP.toUpperCase());
     assert.equal(err.result.locales.es.boom, undefined);
-    assert.ok(err.result.hashes && 'keep' in err.result.hashes && !('boom' in err.result.hashes));
+    assert.ok(err.result.hashes?.es && 'keep' in err.result.hashes.es && !('boom' in err.result.hashes.es));
     assert.ok(err.result.memory && memoryKey(KEEP) in err.result.memory);
     assert.equal(err.result.stats.failedChunks, 1);
     assert.equal(err.result.written, undefined, 'the core writes nothing, so it cannot say what was written');

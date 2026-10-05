@@ -256,8 +256,8 @@ await translate({
 });
 ```
 
-A custom engine can report through the same logger by implementing the optional
-`setLogger(log)`; `BaseEngine` already does.
+A custom engine reports through the same logger by calling the `log` that each
+`translateChunk` request carries; `BaseEngine` already does.
 
 ### Inspecting target files
 
@@ -320,7 +320,7 @@ run.removed.es; // ["bye"]: pruned, the source no longer has it
 ```
 
 Options: `from`, `to`, `config` (merged over the defaults and validated), `existing`
-(documents by locale), `hashes` (passing it turns incremental on), `memory`, `glossary`
+(documents by locale), `hashes` (hash maps by locale; passing it turns incremental on), `memory`, `glossary`
 (resolved terms and a do-not-translate list), `namespace`, `force`, `dryRun`, `engine`
 and `logger`. It resolves with an `ObjectRun`: a `TranslationRun` (`locales`, `stats`,
 `removed`) plus the updated `hashes` and `memory`.
@@ -357,6 +357,12 @@ try {
 | `translate({ ...o, validate: true })`, then `process.exitCode` | `validate(o)`, then check the result              |
 | `err.partial`                                               | `err.result.locales`                                 |
 | progress printed to stderr                                  | pass `logger: stderrLogger`                          |
+| custom engine `translateChunk(chunk, locales, from, ns, glossary)` | `translateChunk(req)`; `req` is `{ chunk, targetLocales, sourceLocale, namespace, glossaryBlock?, log, onRateLimited }` |
+| `reviewChunk(chunk, initial, locales, from, ns, glossary)`  | `reviewChunk(req)`; `req` adds `initial`             |
+| the engine's optional logger and rate-limit setters         | removed: use `req.log`, and call `req.onRateLimited()` on a 429 |
+| `BaseEngine` subclass overriding `makeCall` or calling `parseResponse` | both take the request as a last argument, for its `log` and `onRateLimited` |
+| hash sidecar `{ key: hash }`                                | `{ locale: { key: hash } }`; a v2 file is converted on the first run |
+| `translateObject({ hashes: { key: hash } })`                | `hashes: { es: { key: hash } }`                      |
 | CLI: several locales as JSON strings inside JSON            | one JSON document                                    |
 | CLI: `--diff` / `--validate` report on stderr               | on stdout                                            |
 
@@ -548,10 +554,15 @@ reports nothing as changed — there is no record of what the source used to be.
 
 When `--incremental` is set (or `incremental: true` in the API), loqui stores a hash of each source value next to the input file as `.{name}.loqui-hash.json`. On subsequent runs, only keys whose source text changed (or that are missing from the target) are sent to the LLM.
 
-A key is recorded only once every target locale that needed it has its new translation —
-a changed key that still holds its old one does not count — so a key that failed stays
-outstanding. Keys deleted from the source are pruned from the sidecar, which therefore
-tracks the source rather than growing forever.
+The sidecar holds one map per target locale, `{ "es": { "<key>": "<hash>" } }`. A locale's
+hash for a key is recorded only once that locale has the new translation — a changed key
+that still holds its old one does not count — so a key that failed stays outstanding for
+that locale, and a locale you did not run keeps its entry. With no output, a dry run, or
+a run where nothing landed, the sidecar does not change. Keys deleted from the source are
+pruned, so the sidecar tracks the source rather than growing forever.
+
+A v2 sidecar (one flat map of hashes) is read as the hashes of every locale in `--to`
+and rewritten per locale, so the first v3 run should cover every locale you translate.
 
 ```sh
 loqui --input en.json --from en --to es,de --output ./i18n/{locale}.json --incremental
@@ -596,17 +607,12 @@ Pass any object implementing `EngineAdapter` via the `engine` option to bypass t
 import {
   translate,
   EngineAdapter,
-  TranslationChunk,
+  TranslateChunkRequest,
   TranslationResult,
 } from "@mihairo/loqui";
 
 const myEngine: EngineAdapter = {
-  async translateChunk(
-    chunk: TranslationChunk,
-    targetLocales: string[],
-    sourceLocale: string,
-    namespace: string,
-  ) {
+  async translateChunk({ chunk, targetLocales }: TranslateChunkRequest) {
     const result: Record<string, TranslationResult> = {};
     for (const locale of targetLocales) {
       // call your own LLM or translation service here
@@ -626,19 +632,15 @@ await translate({ input: "en.json", from: "en", to: ["es"], engine: myEngine });
 Or extend `BaseEngine` to reuse the built-in prompt builder and JSON response parser:
 
 ```typescript
-import { BaseEngine, LoquiConfig, TranslationChunk } from "@mihairo/loqui";
+import { BaseEngine, LoquiConfig, TranslateChunkRequest } from "@mihairo/loqui";
 
 class MyEngine extends BaseEngine {
   constructor(config: LoquiConfig) {
     super(config);
   }
 
-  async translateChunk(
-    chunk: TranslationChunk,
-    targetLocales: string[],
-    sourceLocale: string,
-    namespace: string,
-  ) {
+  async translateChunk(req: TranslateChunkRequest) {
+    const { chunk, targetLocales, sourceLocale, namespace } = req;
     const systemPrompt = this.buildSystemPrompt(
       targetLocales,
       sourceLocale,
@@ -648,7 +650,8 @@ class MyEngine extends BaseEngine {
 
     const raw = await callMyLLM(systemPrompt, userPrompt); // your implementation
 
-    return this.parseResponse(raw, Object.keys(chunk.keys), targetLocales);
+    // req carries this call's log, so parse warnings reach this run only
+    return this.parseResponse(raw, Object.keys(chunk.keys), targetLocales, req);
   }
 }
 

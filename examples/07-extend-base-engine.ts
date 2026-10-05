@@ -11,7 +11,7 @@
  *   MY_API_KEY=... npx ts-node examples/07-extend-base-engine.ts
  */
 
-import { translate, BaseEngine, LoquiConfig, TranslationChunk, TranslationResult } from '@mihairo/loqui';
+import { translate, BaseEngine, LoquiConfig, TranslateChunkRequest, TranslationResult } from '@mihairo/loqui';
 
 class MyCustomEngine extends BaseEngine {
   constructor(config: LoquiConfig) {
@@ -20,12 +20,8 @@ class MyCustomEngine extends BaseEngine {
     super(config, apiKey);
   }
 
-  async translateChunk(
-    chunk: TranslationChunk,
-    targetLocales: string[],
-    sourceLocale: string,
-    namespace: string,
-  ): Promise<Record<string, TranslationResult>> {
+  async translateChunk(req: TranslateChunkRequest): Promise<Record<string, TranslationResult>> {
+    const { chunk, targetLocales, sourceLocale, namespace } = req;
     const systemPrompt = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
     const userPrompt = this.buildUserPrompt(chunk, targetLocales, sourceLocale);
 
@@ -33,7 +29,7 @@ class MyCustomEngine extends BaseEngine {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.getApiKey()}`,
       },
       body: JSON.stringify({ system: systemPrompt, user: userPrompt }),
     });
@@ -42,8 +38,9 @@ class MyCustomEngine extends BaseEngine {
 
     const data = (await response.json()) as { text: string };
 
-    // parseResponse handles JSON extraction, key validation, and locale mapping
-    return this.parseResponse(data.text, Object.keys(chunk.keys), targetLocales);
+    // parseResponse handles JSON extraction, key validation, and locale mapping;
+    // req carries this call's log, so its warnings reach this run only
+    return this.parseResponse(data.text, Object.keys(chunk.keys), targetLocales, req);
   }
 }
 

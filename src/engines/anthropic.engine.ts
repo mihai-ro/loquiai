@@ -1,6 +1,6 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
-import { BaseEngine } from './base.engine.js';
+import { BaseEngine, type CallContext } from './base.engine.js';
 import { assertComplete, fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
 
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1';
@@ -22,6 +22,7 @@ export class AnthropicEngine extends BaseEngine {
     userPrompt: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
     const model = this.config.model || DEFAULT_MODEL;
     const apiVersion = process.env.ANTHROPIC_API_VERSION ?? DEFAULT_ANTHROPIC_API_VERSION;
@@ -58,15 +59,14 @@ export class AnthropicEngine extends BaseEngine {
         engineName: 'Anthropic',
         maxRetries: MAX_RETRIES,
         timeoutMs: this.config.timeout ?? 120_000,
-        onRateLimited: this.getRateLimitSignal(),
-        ...this.retryHooks(),
+        ...this.retryHooks(ctx),
       },
     )) as AnthropicResponse;
     assertComplete(data?.stop_reason, 'Anthropic');
 
     const toolBlock = data?.content?.find((b) => b.type === 'tool_use');
     if (toolBlock?.input) {
-      return this.extractTranslations(toolBlock.input, expectedKeys, targetLocales);
+      return this.extractTranslations(toolBlock.input, expectedKeys, targetLocales, ctx);
     }
 
     const raw = data?.content?.find((b) => b.type === 'text')?.text;
@@ -76,7 +76,7 @@ export class AnthropicEngine extends BaseEngine {
         `Anthropic returned empty response: ${sanitizeForDisplay(JSON.stringify(data))}`,
       );
 
-    return this.parseResponse(raw, expectedKeys, targetLocales);
+    return this.parseResponse(raw, expectedKeys, targetLocales, ctx);
   }
 }
 

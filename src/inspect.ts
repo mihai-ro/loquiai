@@ -47,7 +47,7 @@ function load(options: InspectOptions) {
   const to = resolveTargets(options.to, config);
   const { inputPath, sourceFlat } = loadSource(options.input, config);
   const existing = loadExisting(resolveOutputPaths(options.output, to), to);
-  return { inputPath, sourceFlat, existing: stringsOf(existing) };
+  return { inputPath, to, sourceFlat, existing: stringsOf(existing) };
 }
 
 /**
@@ -56,12 +56,12 @@ function load(options: InspectOptions) {
  * sidecar was written. Only reads: no log, no file written, no exit code set.
  */
 export function diff(options: InspectOptions): DiffReport {
-  const { inputPath, sourceFlat, existing } = load(options);
+  const { inputPath, to, sourceFlat, existing } = load(options);
   const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
-  const hashStore = hashFilePath ? loadHashStore(hashFilePath) : {};
+  const hashStore = hashFilePath ? loadHashStore(hashFilePath, to) : {};
   return {
     results: diffLocales(sourceFlat, existing, hashStore),
-    hasBaseline: Object.keys(hashStore).length > 0,
+    hasBaseline: Object.values(hashStore).some((store) => Object.keys(store).length > 0),
   };
 }
 

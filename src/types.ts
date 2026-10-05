@@ -99,7 +99,10 @@ export interface TranslationResult {
   keys: FlatTranslations;
 }
 
+/** Source hash by key, for one locale. */
 export type HashStore = Record<string, string>;
+/** The hash sidecar: one `HashStore` per target locale, since each locale is delivered on its own. */
+export type LocaleHashes = Record<string, HashStore>;
 export type TranslationMemory = Record<string, Record<string, string>>;
 
 /** Terminology glossary configuration. All fields optional; absence disables the feature. */
@@ -147,7 +150,7 @@ export interface TranslationRun {
 
 /** The result of `translateObject()`: the run, plus the state a caller persists to make the next one incremental. */
 export interface ObjectRun extends TranslationRun {
-  hashes: HashStore;
+  hashes: LocaleHashes;
   memory: TranslationMemory;
 }
 
@@ -157,34 +160,30 @@ export interface TranslateResult extends TranslationRun {
   written: Record<string, string>;
 }
 
+/** What an engine is asked to translate in one call, and where to report while doing it. */
+export interface TranslateChunkRequest {
+  chunk: TranslationChunk;
+  targetLocales: string[];
+  sourceLocale: string;
+  namespace: string;
+  glossaryBlock?: string;
+  /**
+   * The calling run's log. Per call, not per engine, so two runs sharing one engine
+   * instance each get only their own messages in `stats.warnings`.
+   */
+  log: LogFn;
+  /** Call when the provider answers 429. It narrows the calling run's concurrency and no one else's. */
+  onRateLimited: () => void;
+}
+
+/** A `TranslateChunkRequest` for the self-review pass, with the translations to review. */
+export interface ReviewChunkRequest extends TranslateChunkRequest {
+  initial: Record<string, TranslationResult>;
+}
+
 /** Adapter interface for plugging in custom LLM engines. */
 export interface EngineAdapter {
-  translateChunk(
-    chunk: TranslationChunk,
-    targetLocales: string[],
-    sourceLocale: string,
-    namespace: string,
-    glossaryBlock?: string,
-  ): Promise<Record<string, TranslationResult>>;
+  translateChunk(req: TranslateChunkRequest): Promise<Record<string, TranslationResult>>;
   /** Optional self-review pass — called after translateChunk when config.review is true. */
-  reviewChunk?(
-    chunk: TranslationChunk,
-    initial: Record<string, TranslationResult>,
-    targetLocales: string[],
-    sourceLocale: string,
-    namespace: string,
-    glossaryBlock?: string,
-  ): Promise<Record<string, TranslationResult>>;
-  /**
-   * optional hook for the AIMD concurrency controller.
-   * Called by `translateJson` so that rate-limit signals from within the engine
-   * can feed back into the concurrency window.
-   */
-  setRateLimitSignal?(fn: () => void): void;
-  /**
-   * optional hook for diagnostics. Called by `translateJson` with the run's log, so what
-   * the engine reports (a retry, a response it had to repair) reaches the run's logger
-   * and its `stats.warnings`. An engine without it stays silent.
-   */
-  setLogger?(log: LogFn): void;
+  reviewChunk?(req: ReviewChunkRequest): Promise<Record<string, TranslationResult>>;
 }

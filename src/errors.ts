@@ -1,4 +1,4 @@
-import type { HashStore, TranslationMemory, TranslationRun } from './types.js';
+import type { LocaleHashes, TranslationMemory, TranslationRun } from './types.js';
 
 export type LoquiErrorCode =
   | 'AUTH'
@@ -15,7 +15,7 @@ export type LoquiErrorCode =
 /** What a run that failed in some of its chunks did get done. */
 export type FailedRunResult = TranslationRun & {
   /** set by `translateObject()`, for a caller that persists partial progress. */
-  hashes?: HashStore;
+  hashes?: LocaleHashes;
   memory?: TranslationMemory;
   /** set by `translate()`: the files written before it gave up. */
   written?: Record<string, string>;

@@ -1,5 +1,5 @@
-import { hashValue } from './hasher.js';
-import type { FlatTranslations, HashStore } from './types.js';
+import { hashValue, localeStore } from './hasher.js';
+import type { FlatTranslations, LocaleHashes } from './types.js';
 import { isUntranslated } from './untranslated.js';
 
 /** Result of comparing source against a target locale. */
@@ -29,7 +29,7 @@ export interface DiffResult {
 export function diffLocales(
   sourceFlat: FlatTranslations,
   existing: Record<string, FlatTranslations>,
-  hashStore: HashStore = {},
+  hashStore: LocaleHashes = {},
 ): DiffResult[] {
   const sourceKeys = new Set(Object.keys(sourceFlat));
 
@@ -37,6 +37,7 @@ export function diffLocales(
 
   for (const [locale, targetFlat] of Object.entries(existing)) {
     const targetKeys = new Set(Object.keys(targetFlat));
+    const localeHashes = localeStore(hashStore, locale) ?? {};
 
     const added: string[] = [];
     const removed: string[] = [];
@@ -55,7 +56,7 @@ export function diffLocales(
       if (!sourceKeys.has(key)) {
         removed.push(key);
       } else if (!isUntranslated(sourceFlat[key], targetFlat[key])) {
-        const previousHash = hashStore[key];
+        const previousHash = Object.hasOwn(localeHashes, key) ? localeHashes[key] : undefined;
         const sourceChanged = previousHash !== undefined && previousHash !== hashValue(sourceFlat[key]);
         if (sourceChanged) changed.push(key);
         else unchanged.push(key);

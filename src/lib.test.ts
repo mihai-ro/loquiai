@@ -5,14 +5,14 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { LoquiError } from './errors.js';
 import { hashValue } from './hasher.js';
-import { translate } from './lib.js';
+import { diff, translate, translateObject } from './lib.js';
 import { memoryKey } from './translation-memory.js';
 import { translateJson } from './translator.js';
 import {
   CONFIG_DEFAULTS,
   type EngineAdapter,
   type LoquiConfig,
-  type TranslationChunk,
+  type TranslateChunkRequest,
   type TranslationResult,
 } from './types.js';
 import type { LogFn } from './utils/logger.js';
@@ -25,7 +25,7 @@ let tmpCounter = 0;
 
 function makeEngine(transform: (v: string) => string = (v) => v.toUpperCase()): EngineAdapter {
   return {
-    async translateChunk(chunk: TranslationChunk, targetLocales: string[]): Promise<Record<string, TranslationResult>> {
+    async translateChunk({ chunk, targetLocales }: TranslateChunkRequest): Promise<Record<string, TranslationResult>> {
       const result: Record<string, TranslationResult> = {};
       for (const locale of targetLocales) {
         const keys: Record<string, string> = {};
@@ -306,15 +306,15 @@ describe('translate — incremental mode', () => {
   test('skips engine call for unchanged keys', async () => {
     let callCount = 0;
     const countingEngine: EngineAdapter = {
-      async translateChunk(chunk, targetLocales) {
+      async translateChunk(req) {
         callCount++;
-        return makeEngine().translateChunk(chunk, targetLocales, 'en', 'test');
+        return makeEngine().translateChunk(req);
       },
     };
 
     const source = { greeting: 'Hello' };
     const existing = { fr: { greeting: 'Bonjour' } };
-    const hashStore = { greeting: hashValue('Hello') };
+    const hashStore = { fr: { greeting: hashValue('Hello') } };
 
     await translateJson({
       logger: silent,
@@ -335,15 +335,17 @@ describe('translate — incremental mode', () => {
     const source = { greeting: 'Hello!', farewell: 'Goodbye' };
     const existing = { fr: { greeting: 'Bonjour', farewell: 'Au revoir' } };
     const hashStore = {
-      greeting: hashValue('Hello!'), // matches
-      farewell: hashValue('Old value'), // stale
+      fr: {
+        greeting: hashValue('Hello!'), // matches
+        farewell: hashValue('Old value'), // stale
+      },
     };
 
     let capturedChunkKeys: Record<string, string> = {};
     const trackingEngine: EngineAdapter = {
-      async translateChunk(chunk, targetLocales) {
-        capturedChunkKeys = { ...chunk.keys };
-        return makeEngine().translateChunk(chunk, targetLocales, 'en', 'test');
+      async translateChunk(req) {
+        capturedChunkKeys = { ...req.chunk.keys };
+        return makeEngine().translateChunk(req);
       },
     };
 
@@ -421,7 +423,7 @@ describe('translate — non-string values survive the round trip', () => {
       to: ['fr'],
       output: path.join(dir, '{locale}.json'),
       engine: {
-        async translateChunk(chunk, targetLocales) {
+        async translateChunk({ chunk, targetLocales }) {
           seen.push(...Object.values(chunk.keys));
           const result: Record<string, TranslationResult> = {};
           for (const locale of targetLocales) {
@@ -600,7 +602,7 @@ describe('translate — a blank target means not translated yet', () => {
   /** Uppercases, but answers nothing for keys ending in a name from `refuse`; records what it was sent. */
   function engineRefusing(refuse: string[], sent: string[]): EngineAdapter {
     return {
-      async translateChunk(chunk, targetLocales) {
+      async translateChunk({ chunk, targetLocales }) {
         sent.push(...Object.keys(chunk.keys));
         return Object.fromEntries(
           targetLocales.map((l) => [
@@ -666,7 +668,7 @@ describe('translate — a blank target means not translated yet', () => {
   test('an engine answer of an empty string is still rejected', async () => {
     const { dir, input, fr } = project({ items: ['a', 'b'] });
     const engine: EngineAdapter = {
-      async translateChunk(chunk, targetLocales) {
+      async translateChunk({ chunk, targetLocales }) {
         return Object.fromEntries(
           targetLocales.map((l) => [
             l,
@@ -755,7 +757,7 @@ describe('translate — a partial run keeps what it paid for', () => {
   /** Fails only for the keys named, so a run can be made to half-succeed. */
   function flakyEngine(failOn: string[]): EngineAdapter {
     return {
-      async translateChunk(chunk, targetLocales) {
+      async translateChunk({ chunk, targetLocales }) {
         if (Object.keys(chunk.keys).some((k) => failOn.includes(k))) throw new Error('API exploded');
         const result: Record<string, TranslationResult> = {};
         for (const locale of targetLocales) {
@@ -943,7 +945,7 @@ describe('translate — a partial run keeps what it paid for', () => {
       (err: unknown) => err instanceof LoquiError && err.code === 'CHUNK_FAILED',
     );
 
-    const hashes = JSON.parse(fs.readFileSync(hashFile, 'utf-8'));
+    const hashes = JSON.parse(fs.readFileSync(hashFile, 'utf-8')).fr;
     assert.ok('keep' in hashes);
     assert.ok(!('boom' in hashes), 'recording a hash for an undelivered key would strand it');
 
@@ -957,7 +959,7 @@ describe('translate — a partial run keeps what it paid for', () => {
       hashFile,
       config: { splitToken: 500 },
       engine: {
-        async translateChunk(chunk, targetLocales) {
+        async translateChunk({ chunk, targetLocales }) {
           seen.push(...Object.keys(chunk.keys));
           const result: Record<string, TranslationResult> = {};
           for (const locale of targetLocales) {
@@ -1138,7 +1140,7 @@ describe('translate — the typed result', () => {
   test('an inline glossary key is not translated or written', async () => {
     const seen: string[] = [];
     const engine: EngineAdapter = {
-      async translateChunk(chunk, targetLocales) {
+      async translateChunk({ chunk, targetLocales }) {
         seen.push(...Object.keys(chunk.keys));
         return Object.fromEntries(
           targetLocales.map((l) => [
@@ -1169,9 +1171,9 @@ describe('translate — a failed run reports what was written', () => {
   function flaky(): EngineAdapter {
     const inner = makeEngine();
     return {
-      async translateChunk(chunk, ...rest) {
-        if ('boom' in chunk.keys) throw new Error('API exploded');
-        return inner.translateChunk(chunk, ...rest);
+      async translateChunk(req) {
+        if ('boom' in req.chunk.keys) throw new Error('API exploded');
+        return inner.translateChunk(req);
       },
     };
   }
@@ -1257,5 +1259,232 @@ describe('translate — a failed run reports what was written', () => {
 
     assert.equal(err.code, 'PARSE_ERROR');
     assert.equal(err.result, undefined);
+  });
+});
+
+describe('translate — an output record must cover every target locale', () => {
+  test('rejects INVALID_CONFIG naming the missing locale, before any engine call or write', async () => {
+    const dir = nextTmp();
+    let calls = 0;
+    const engine = makeEngine();
+    const counting: EngineAdapter = {
+      translateChunk: (...args) => {
+        calls++;
+        return engine.translateChunk(...args);
+      },
+    };
+
+    await assert.rejects(
+      translate({
+        input: '{"greeting":"hello"}',
+        from: 'en',
+        to: ['es', 'de'],
+        output: { es: path.join(dir, 'es.json') },
+        engine: counting,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof LoquiError);
+        assert.equal(err.code, 'INVALID_CONFIG');
+        assert.match(err.message, /\bde\b/);
+        return true;
+      },
+    );
+    assert.equal(calls, 0);
+    assert.equal(fs.existsSync(dir), false);
+  });
+
+  test('replaces every {locale} in a template', async () => {
+    const dir = nextTmp();
+    await translate({
+      input: '{"greeting":"hello"}',
+      from: 'en',
+      to: ['es'],
+      output: path.join(dir, '{locale}', '{locale}.json'),
+      engine: makeEngine(),
+    });
+    assert.equal(fs.existsSync(path.join(dir, 'es', 'es.json')), true);
+  });
+});
+
+describe('translateObject — keys named like Object.prototype members', () => {
+  const source = { constructor: 'Build', toString: 'Text' };
+
+  test('a complete target is not re-sent', async () => {
+    let calls = 0;
+    const engine = makeEngine();
+    const counting: EngineAdapter = {
+      translateChunk: (...args) => {
+        calls++;
+        return engine.translateChunk(...args);
+      },
+    };
+    await translateObject(source, {
+      from: 'en',
+      to: ['es'],
+      engine: counting,
+      existing: { es: { constructor: 'x', toString: 'y' } },
+    });
+    assert.equal(calls, 0);
+  });
+
+  test('without existing, both are translated', async () => {
+    const run = await translateObject(source, { from: 'en', to: ['es'], engine: makeEngine() });
+    assert.deepEqual(run.locales.es, { constructor: 'BUILD', toString: 'TEXT' });
+  });
+});
+
+describe('translate — the hash sidecar is kept per locale', () => {
+  interface Project {
+    dir: string;
+    source: string;
+    hashFile: string;
+    out: string;
+    calls: () => number;
+    run: (to: string[], extra?: { output?: boolean }) => ReturnType<typeof translate>;
+    edit: (doc: Record<string, string>) => void;
+    read: (locale: string) => Record<string, string>;
+    sidecar: () => Record<string, Record<string, string>>;
+  }
+
+  /** A project with `en.json` holding `{ greeting: 'hello' }`, a counting engine and an incremental sidecar. */
+  function project(): Project {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const source = path.join(dir, 'en.json');
+    const hashFile = path.join(dir, 'hash.json');
+    const out = path.join(dir, '{locale}.json');
+    fs.writeFileSync(source, JSON.stringify({ greeting: 'hello' }));
+    let calls = 0;
+    const engine = makeEngine();
+    const counting: EngineAdapter = {
+      translateChunk: (...args) => {
+        calls++;
+        return engine.translateChunk(...args);
+      },
+    };
+    return {
+      dir,
+      source,
+      hashFile,
+      out,
+      calls: () => calls,
+      run: (to, extra) =>
+        translate({
+          input: source,
+          from: 'en',
+          to,
+          output: extra?.output === false ? undefined : out,
+          hashFile,
+          engine: counting,
+        }),
+      edit: (doc) => fs.writeFileSync(source, JSON.stringify(doc)),
+      read: (locale) => JSON.parse(fs.readFileSync(path.join(dir, `${locale}.json`), 'utf-8')),
+      sidecar: () => JSON.parse(fs.readFileSync(hashFile, 'utf-8')),
+    };
+  }
+
+  test('a source edit delivered to es is still owed to pt', async () => {
+    const p = project();
+    await p.run(['es', 'pt']);
+    const ptBefore = p.sidecar().pt;
+
+    p.edit({ greeting: 'hello there' });
+    await p.run(['es']);
+    assert.deepEqual(p.sidecar().pt, ptBefore, 'a locale outside this run keeps its entry');
+
+    const before = p.calls();
+    await p.run(['pt']);
+
+    assert.equal(p.read('pt').greeting, 'HELLO THERE');
+    assert.equal(p.calls() - before, 1);
+  });
+
+  test('an incremental run with no output leaves the sidecar alone, so the next run with output still translates', async () => {
+    const p = project();
+    await p.run(['es']);
+    const sidecarBefore = fs.readFileSync(p.hashFile, 'utf-8');
+
+    p.edit({ greeting: 'hello there' });
+    await p.run(['es'], { output: false });
+    assert.equal(fs.readFileSync(p.hashFile, 'utf-8'), sidecarBefore);
+
+    await p.run(['es']);
+    assert.equal(p.read('es').greeting, 'HELLO THERE');
+  });
+
+  test('a v2 flat sidecar applies to every locale, costs nothing, and is rewritten per locale', async () => {
+    const p = project();
+    await p.run(['es', 'pt']);
+    const flat = { greeting: hashValue('hello') };
+    fs.writeFileSync(p.hashFile, JSON.stringify(flat));
+    const before = p.calls();
+
+    await p.run(['es', 'pt']);
+
+    assert.equal(p.calls() - before, 0);
+    assert.deepEqual(p.sidecar(), { es: flat, pt: flat });
+  });
+
+  test('a v2 flat sidecar is not expanded to locales outside `to`', async () => {
+    const p = project();
+    await p.run(['es']);
+    fs.writeFileSync(p.hashFile, JSON.stringify({ greeting: hashValue('hello') }));
+
+    await p.run(['es']);
+
+    assert.deepEqual(Object.keys(p.sidecar()), ['es']);
+  });
+
+  test('diff() reports a key as changed for the locale that was not re-delivered', async () => {
+    const p = project();
+    await p.run(['es', 'pt']);
+    p.edit({ greeting: 'hello there' });
+    await p.run(['es']);
+
+    const { results } = diff({ input: p.source, to: ['es', 'pt'], output: p.out, hashFile: p.hashFile });
+
+    const byLocale = Object.fromEntries(results.map((r) => [r.locale, r]));
+    assert.deepEqual(byLocale.pt.changed, ['greeting']);
+    assert.deepEqual(byLocale.es.unchanged, ['greeting']);
+    assert.deepEqual(byLocale.es.changed, []);
+  });
+
+  test('diff() reads a v2 flat sidecar for every locale', async () => {
+    const p = project();
+    await p.run(['es', 'pt']);
+    fs.writeFileSync(p.hashFile, JSON.stringify({ greeting: hashValue('older') }));
+
+    const { results, hasBaseline } = diff({
+      input: p.source,
+
+      to: ['es', 'pt'],
+      output: p.out,
+      hashFile: p.hashFile,
+    });
+
+    assert.equal(hasBaseline, true);
+    assert.deepEqual(
+      results.map((r) => r.changed),
+      [['greeting'], ['greeting']],
+    );
+  });
+
+  test('a dry run does not touch the sidecar', async () => {
+    const p = project();
+    await p.run(['es']);
+    const before = fs.readFileSync(p.hashFile, 'utf-8');
+    p.edit({ greeting: 'hello there' });
+
+    await translate({
+      input: p.source,
+      from: 'en',
+      to: ['es'],
+      output: p.out,
+      hashFile: p.hashFile,
+      dryRun: true,
+      engine: makeEngine(),
+    });
+
+    assert.equal(fs.readFileSync(p.hashFile, 'utf-8'), before);
   });
 });

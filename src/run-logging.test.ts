@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { BaseEngine } from './engines/base.engine.js';
+import { BaseEngine, type CallContext } from './engines/base.engine.js';
 import { fetchWithRetry } from './engines/utils.js';
 import { translate } from './lib.js';
 import { translateJson } from './translator.js';
@@ -11,7 +11,7 @@ import {
   CONFIG_DEFAULTS,
   type EngineAdapter,
   type LoquiConfig,
-  type TranslationChunk,
+  type TranslateChunkRequest,
   type TranslationResult,
 } from './types.js';
 import type { LogFn, LogLevel } from './utils/logger.js';
@@ -50,12 +50,13 @@ class PartialEngine extends BaseEngine {
     _user: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
     await tick();
     const answer = Object.fromEntries(
       this.respondTo.map((l) => [l, Object.fromEntries(expectedKeys.map((k) => [k, 'x']))]),
     );
-    return this.extractTranslations(answer, expectedKeys, targetLocales);
+    return this.extractTranslations(answer, expectedKeys, targetLocales, ctx);
   }
 }
 
@@ -75,9 +76,14 @@ class RetryingEngine extends PartialEngine {
     user: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
-    await fetchWithRetry('https://example.invalid/v1', {}, { ...this.retryHooks(), maxRetries: 2, engineName: 'Test' });
-    return super.makeCall(system, user, expectedKeys, targetLocales);
+    await fetchWithRetry(
+      'https://example.invalid/v1',
+      {},
+      { ...this.retryHooks(ctx), maxRetries: 2, engineName: 'Test' },
+    );
+    return super.makeCall(system, user, expectedKeys, targetLocales, ctx);
   }
 }
 
@@ -252,18 +258,19 @@ describe('the messages a logger receives', () => {
 });
 
 describe('two runs at once', () => {
-  test('each logger receives only its own run, engine messages included', async () => {
+  test('each logger and stats.warnings get only their own run, on one shared engine instance', async () => {
     const a = collector();
     const b = collector();
+    const shared = new PartialEngine(['es']);
 
-    await Promise.all([
+    const [runA, runB] = await Promise.all([
       translateJson({
         sourceFlat: { a1: 'one' },
         from: 'en',
         to: ['es', 'pt'],
         namespace: 'alpha',
         config,
-        engine: new PartialEngine(['es']),
+        engine: shared,
         logger: a.log,
       }),
       translateJson({
@@ -272,13 +279,15 @@ describe('two runs at once', () => {
         to: ['es', 'pt'],
         namespace: 'beta',
         config,
-        engine: new PartialEngine(['es']),
+        engine: shared,
         logger: b.log,
       }),
     ]);
 
     const messagesA = a.entries.map((e) => e.message);
     const messagesB = b.entries.map((e) => e.message);
+    assert.deepEqual(runA.stats.warnings, a.at('warn'));
+    assert.deepEqual(runB.stats.warnings, b.at('warn'));
     assert.ok(messagesA.length > 0 && messagesB.length > 0);
     assert.ok(
       messagesA.every((m) => !m.includes('[beta') && !m.includes('all 2 key(s)')),
@@ -301,14 +310,14 @@ describe('two runs at once', () => {
 
 describe('an engine and the logger', () => {
   const plain = (): EngineAdapter => ({
-    async translateChunk(chunk: TranslationChunk, targetLocales: string[]) {
+    async translateChunk({ chunk, targetLocales }: TranslateChunkRequest) {
       return Object.fromEntries(
         targetLocales.map((l) => [l, { keys: Object.fromEntries(Object.keys(chunk.keys).map((k) => [k, 'x'])) }]),
       );
     },
   });
 
-  test('an engine without setLogger runs, and the run still logs', async () => {
+  test('an engine that ignores req.log runs, and the run still logs', async () => {
     const given = collector();
 
     const { translations } = await translateJson({
@@ -325,13 +334,12 @@ describe('an engine and the logger', () => {
     assert.ok(given.at('info').length > 0);
   });
 
-  test('an engine with setLogger is handed the run log, so what it says lands in stats.warnings', async () => {
+  test('the log an engine is handed is the run log, so what it says lands in stats.warnings', async () => {
     const given = collector();
-    let handed: LogFn | undefined;
     const engine: EngineAdapter = {
-      ...plain(),
-      setLogger(log) {
-        handed = log;
+      async translateChunk(req) {
+        req.log('warn', 'said by the engine');
+        return plain().translateChunk(req);
       },
     };
 
@@ -344,8 +352,6 @@ describe('an engine and the logger', () => {
       engine,
       logger: given.log,
     });
-    assert.ok(handed, 'setLogger was never called');
-    handed('warn', 'said by the engine');
 
     assert.ok(stats.warnings.includes('said by the engine'));
     assert.ok(given.at('warn').includes('said by the engine'));

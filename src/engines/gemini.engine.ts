@@ -1,6 +1,6 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
-import { BaseEngine } from './base.engine.js';
+import { BaseEngine, type CallContext } from './base.engine.js';
 import { assertComplete, fetchWithRetry, sanitizeForDisplay } from './utils.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -20,6 +20,7 @@ export class GeminiEngine extends BaseEngine {
     userPrompt: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
     const url = `${GEMINI_API_BASE}/${this.config.model}:generateContent`;
     const body = {
@@ -53,8 +54,7 @@ export class GeminiEngine extends BaseEngine {
         maxRetries: MAX_RETRIES,
         timeoutMs: this.config.timeout ?? 120_000,
         parseRetryDelay: parseGeminiRetryDelay,
-        onRateLimited: this.getRateLimitSignal(),
-        ...this.retryHooks(),
+        ...this.retryHooks(ctx),
       },
     )) as GeminiResponse;
     assertComplete(data?.candidates?.[0]?.finishReason, 'Gemini');
@@ -66,7 +66,7 @@ export class GeminiEngine extends BaseEngine {
         `Gemini returned empty response: ${sanitizeForDisplay(JSON.stringify(data))}`,
       );
 
-    return this.parseResponse(raw, expectedKeys, targetLocales);
+    return this.parseResponse(raw, expectedKeys, targetLocales, ctx);
   }
 }
 

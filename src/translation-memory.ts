@@ -1,15 +1,40 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { TranslationMemory } from './types.js';
 import { readJson, writeJson } from './utils/json.js';
 
+const MEMORY_KEY_FORMAT = /^[0-9a-f]{32}$/;
+
+/**
+ * The key a source string is remembered under. A 32-bit hash is fine for noticing that
+ * one key's own text changed, but as the identity of a string across a whole project it
+ * collides: two different strings would share one translation, silently.
+ */
+export function memoryKey(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 32);
+}
+
 /**
  * Loads a translation memory from a JSON file.
- * Returns an empty translation memory if the file does not exist.
+ * Returns an empty translation memory if the file does not exist. Warnings come back
+ * as data: the caller's run logs them, so loading prints nothing.
  */
-export function loadTranslationMemory(tmPath: string): TranslationMemory {
-  const data = readJson(tmPath);
-  return data as TranslationMemory;
+export function loadTranslationMemory(tmPath: string): { memory: TranslationMemory; warnings: string[] } {
+  const data = readJson(tmPath) as TranslationMemory;
+  // Entries from before keys became memoryKey()s are 8-character hashes that can never
+  // match again; keeping them would only carry dead weight into every rewrite.
+  const current: TranslationMemory = {};
+  let dropped = 0;
+  for (const [key, entry] of Object.entries(data)) {
+    if (MEMORY_KEY_FORMAT.test(key)) current[key] = entry;
+    else dropped++;
+  }
+  const warnings =
+    dropped > 0
+      ? [`${tmPath}: ignored ${dropped} translation-memory entr${dropped === 1 ? 'y' : 'ies'} in the old key format.`]
+      : [];
+  return { memory: current, warnings };
 }
 
 /**
@@ -23,7 +48,11 @@ export function saveTranslationMemory(tmPath: string, tm: TranslationMemory): vo
 
 /**
  * Looks up a hash in the translation memory.
- * Returns translations for all requested locales if present, otherwise null.
+ *
+ * Returns whatever is cached for the requested locales, which may be a subset —
+ * demanding all of them means a key only `fr` needs misses the memory whenever `de`
+ * happens to lack it, and the caller pays to translate something already known.
+ * Returns null when nothing is cached for any of them.
  */
 export function lookupTranslationMemory(
   tm: TranslationMemory,
@@ -33,14 +62,11 @@ export function lookupTranslationMemory(
   const entry = tm[hash];
   if (!entry) return null;
 
-  const missing = locales.filter((locale) => !(locale in entry));
-  if (missing.length > 0) return null;
-
   const result: Record<string, string> = {};
   for (const locale of locales) {
-    result[locale] = entry[locale];
+    if (locale in entry) result[locale] = entry[locale];
   }
-  return result;
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 /**

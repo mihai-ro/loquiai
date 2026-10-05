@@ -74,6 +74,17 @@ function parseFile(filePath: string): LoquiConfig {
   return config;
 }
 
+/**
+ * Target locales key plain objects all through a run, where a `__proto__` key replaces
+ * the object's prototype instead of adding an entry: that locale would drop out of the
+ * result without an error.
+ */
+export function validateTargets(to: string[]): void {
+  if (to.includes('__proto__')) {
+    throw new LoquiError('INVALID_CONFIG', "'__proto__' is not a valid target locale");
+  }
+}
+
 export function validateConfig(config: LoquiConfig, source: string): void {
   if (!['gemini', 'openai', 'anthropic'].includes(config.engine)) {
     throw new LoquiError(

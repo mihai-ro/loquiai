@@ -1,15 +1,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { HashStore } from './types.js';
+import type { HashStore, LocaleHashes } from './types.js';
 import { readJson, writeJson } from './utils/json.js';
 
-export function loadHashStore(hashFile: string): HashStore {
-  return readJson(hashFile) as HashStore;
+/**
+ * Reads the sidecar as one store per locale in `to`. A v2 sidecar is a single flat store
+ * (its values are strings) and is applied to every locale in `to`: it never said which
+ * locale a hash was for, so each of them has to inherit it. Locales outside `to` get nothing.
+ */
+export function loadHashStore(hashFile: string, to: string[]): LocaleHashes {
+  const raw = readJson(hashFile) as Record<string, unknown>;
+  if (Object.values(raw).some((value) => typeof value === 'string')) {
+    return Object.fromEntries(to.map((locale) => [locale, { ...(raw as HashStore) }]));
+  }
+  return raw as LocaleHashes;
 }
 
-export function saveHashStore(hashFile: string, store: HashStore): void {
+export function saveHashStore(hashFile: string, store: LocaleHashes): void {
   fs.mkdirSync(path.dirname(hashFile), { recursive: true });
-  writeJson(hashFile, store as Record<string, unknown>);
+  writeJson(hashFile, store);
+}
+
+/** A locale's own store, never one inherited from `Object.prototype`. */
+export function localeStore(hashes: LocaleHashes | undefined, locale: string): HashStore | undefined {
+  return hashes && Object.hasOwn(hashes, locale) ? hashes[locale] : undefined;
 }
 
 /**
@@ -26,6 +40,28 @@ export function hashValue(value: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
-export function buildUpdatedHashStore(existing: HashStore, currentHashes: HashStore): HashStore {
-  return { ...existing, ...currentHashes };
+/**
+ * The sidecar after a run: for each locale in `to`, the current source hash of every key
+ * that locale has nothing outstanding for, and the stored hash of the rest. A key the
+ * source no longer has is dropped, or the sidecar only ever grows. A key a locale still
+ * owes keeps its old hash (or none), so the next run sees it as outstanding for that
+ * locale. Locales outside `to` pass through untouched.
+ */
+export function buildUpdatedHashes(
+  previous: LocaleHashes,
+  to: string[],
+  currentHashes: HashStore,
+  outstanding: (locale: string, key: string) => boolean,
+): LocaleHashes {
+  const updated: LocaleHashes = { ...previous };
+  for (const locale of to) {
+    const before = localeStore(previous, locale) ?? {};
+    const store: HashStore = {};
+    for (const [key, hash] of Object.entries(currentHashes)) {
+      if (!outstanding(locale, key)) store[key] = hash;
+      else if (Object.hasOwn(before, key)) store[key] = before[key];
+    }
+    updated[locale] = store;
+  }
+  return updated;
 }

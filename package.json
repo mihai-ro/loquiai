@@ -4,7 +4,8 @@
   "type": "module",
   "description": "loqui — i18n translation engine for software projects.",
   "repository": {
-    "url": "https://github.com/mihai-ro/loquiai"
+    "type": "git",
+    "url": "git+https://github.com/mihai-ro/loquiai.git"
   },
   "keywords": [
     "i18n",
@@ -19,18 +20,15 @@
   "license": "Apache-2.0",
   "exports": {
     ".": {
-      "import": "./dist/lib.js",
-      "require": "./dist/lib.cjs"
-    },
-    "./cli": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "types": "./dist/lib.d.ts",
+      "default": "./dist/lib.js"
     }
   },
-  "main": "./dist/lib.cjs",
-  "module": "./dist/lib.js",
+  "main": "./dist/lib.js",
+  "types": "./dist/lib.d.ts",
+  "sideEffects": false,
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "bin": {
     "loqui": "dist/index.js"
@@ -41,13 +39,15 @@
     "test": "tsc -p tsconfig.test.json && node --test .dist-test/*.test.js .dist-test/engines/*.test.js .dist-test/utils/*.test.js",
     "test:ci": "tsc -p tsconfig.test.json && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results.xml .dist-test/*.test.js .dist-test/engines/*.test.js .dist-test/utils/*.test.js",
     "test:coverage": "tsc -p tsconfig.test.json && c8 --check-coverage node --test .dist-test/*.test.js .dist-test/engines/*.test.js .dist-test/utils/*.test.js",
+    "check:types": "tsc -p types-check/tsconfig.json",
+    "bench": "tsc -p tsconfig.test.json && node scripts/bench.mjs",
     "test:watch": "node --test --watch .dist-test/*.test.js .dist-test/engines/*.test.js .dist-test/utils/*.test.js",
     "clean": "rm -rf dist",
     "lint": "biome check src/",
     "lint:fix": "biome check --fix src/",
     "format": "biome format src/",
     "format:fix": "biome format --write src/",
-    "prepublishOnly": "pnpm test:ci && pnpm clean && pnpm build",
+    "prepublishOnly": "pnpm build && pnpm test:ci",
     "translate": "node dist/index.js"
   },
   "files": [
@@ -56,8 +56,16 @@
     "loqui.schema.json",
     "README.md"
   ],
+  "peerDependencies": {
+    "@types/node": ">=22"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.0",
+    "@biomejs/biome": "^2.5.15",
     "@types/node": "^22.0.0",
     "c8": "^12.0.0",
     "esbuild": "^0.28.1",

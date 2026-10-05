@@ -1,7 +1,7 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
-import { BaseEngine } from './base.engine.js';
-import { fetchWithRetry, sanitizeForDisplay } from './utils.js';
+import { BaseEngine, type CallContext } from './base.engine.js';
+import { assertComplete, fetchWithRetry, sanitizeForDisplay } from './utils.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const MAX_RETRIES = 5;
@@ -20,6 +20,7 @@ export class GeminiEngine extends BaseEngine {
     userPrompt: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
     const url = `${GEMINI_API_BASE}/${this.config.model}:generateContent`;
     const body = {
@@ -38,7 +39,7 @@ export class GeminiEngine extends BaseEngine {
       },
     };
 
-    const response = await fetchWithRetry(
+    const data = (await fetchWithRetry(
       url,
       {
         method: 'POST',
@@ -53,12 +54,11 @@ export class GeminiEngine extends BaseEngine {
         maxRetries: MAX_RETRIES,
         timeoutMs: this.config.timeout ?? 120_000,
         parseRetryDelay: parseGeminiRetryDelay,
-        onRateLimited: this.getRateLimitSignal(),
-        ...this.retryHooks(),
+        ...this.retryHooks(ctx),
       },
-    );
+    )) as GeminiResponse;
+    assertComplete(data?.candidates?.[0]?.finishReason, 'Gemini');
 
-    const data = (await response.json()) as GeminiResponse;
     const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!raw)
       throw new LoquiError(
@@ -66,13 +66,13 @@ export class GeminiEngine extends BaseEngine {
         `Gemini returned empty response: ${sanitizeForDisplay(JSON.stringify(data))}`,
       );
 
-    return this.parseResponse(raw, expectedKeys, targetLocales);
+    return this.parseResponse(raw, expectedKeys, targetLocales, ctx);
   }
 }
 
-async function parseGeminiRetryDelay(response: Response): Promise<number | null> {
+function parseGeminiRetryDelay(_headers: Headers, bodyText: string): number | null {
   try {
-    const body = (await response.json()) as GeminiErrorResponse;
+    const body = JSON.parse(bodyText) as GeminiErrorResponse;
     const retryInfo = body?.error?.details?.find((d) => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
     if (retryInfo?.retryDelay) {
       const seconds = parseInt(retryInfo.retryDelay.replace('s', ''), 10);

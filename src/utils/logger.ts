@@ -1,15 +1,32 @@
+export type LogLevel = 'info' | 'warn' | 'debug';
+
+/** Receives every message a run produces. The library writes to no stream itself. */
+export type LogFn = (level: LogLevel, message: string) => void;
+
 const BLUE = '\x1b[0;34m';
 const ORANGE = '\x1b[0;33m';
-const RED = '\x1b[0;31m';
-const GREEN = '\x1b[0;32m';
-const BOLD = '\x1b[1m';
+const DIM = '\x1b[2m';
 const NC = '\x1b[0m';
 
-export const logger = {
-  info: (msg: string) => console.info(`${BLUE} ${msg}${NC}`),
-  warn: (msg: string) => console.warn(`${ORANGE}[❗️] ${msg}${NC}`),
-  error: (msg: string) => console.error(`${RED} ❌ Error:${NC} \x1b[33m${msg}\x1b[0m`),
-  success: (msg: string) => console.info(`${GREEN} ✅ ${msg}${NC}`),
-  header: (msg: string) => console.info(`${BLUE}${BOLD}${msg}${NC}`),
-  dim: (msg: string) => console.info(`\x1b[2m ${msg}${NC}`),
+/**
+ * Colour is decided per call, not at module load: tests and callers may swap the
+ * stream or NO_COLOR between writes, and a cached value would ignore that.
+ */
+function colorEnabled(): boolean {
+  return Boolean(process.stderr.isTTY) && !process.env.NO_COLOR;
+}
+
+/**
+ * Every diagnostic goes to stderr so stdout carries results only — the CLI writes
+ * its result JSON to stdout and `loqui … > es.json` must stay valid JSON.
+ */
+function write(codes: string, msg: string): void {
+  process.stderr.write(colorEnabled() ? `${codes}${msg}${NC}\n` : `${msg}\n`);
+}
+
+/** A `LogFn` that prints to stderr, in colour on a terminal and plain otherwise. */
+export const stderrLogger: LogFn = (level, message) => {
+  if (level === 'warn') write(ORANGE, `[❗️] ${message}`);
+  else if (level === 'debug') write(DIM, ` ${message}`);
+  else write(BLUE, ` ${message}`);
 };

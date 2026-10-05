@@ -1,7 +1,7 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
-import { BaseEngine } from './base.engine.js';
-import { fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
+import { BaseEngine, type CallContext } from './base.engine.js';
+import { assertComplete, fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
 
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const MAX_RETRIES = 5;
@@ -18,6 +18,7 @@ export class OpenAIEngine extends BaseEngine {
     userPrompt: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
     const useSchema = targetLocales.length * expectedKeys.length <= STRUCTURED_OUTPUT_MAX_PROPS;
     const response_format = useSchema
@@ -42,7 +43,7 @@ export class OpenAIEngine extends BaseEngine {
       ],
     };
 
-    const response = await fetchWithRetry(
+    const data = (await fetchWithRetry(
       `${OPENAI_API_BASE}/chat/completions`,
       {
         method: 'POST',
@@ -56,12 +57,11 @@ export class OpenAIEngine extends BaseEngine {
         engineName: 'OpenAI',
         maxRetries: MAX_RETRIES,
         timeoutMs: this.config.timeout ?? 120_000,
-        onRateLimited: this.getRateLimitSignal(),
-        ...this.retryHooks(),
+        ...this.retryHooks(ctx),
       },
-    );
+    )) as OpenAIResponse;
+    assertComplete(data?.choices?.[0]?.finish_reason, 'OpenAI');
 
-    const data = (await response.json()) as OpenAIResponse;
     const raw = data?.choices?.[0]?.message?.content;
     if (!raw)
       throw new LoquiError(
@@ -69,7 +69,7 @@ export class OpenAIEngine extends BaseEngine {
         `OpenAI returned empty response: ${sanitizeForDisplay(JSON.stringify(data))}`,
       );
 
-    return this.parseResponse(raw, expectedKeys, targetLocales);
+    return this.parseResponse(raw, expectedKeys, targetLocales, ctx);
   }
 }
 

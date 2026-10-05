@@ -17,7 +17,7 @@ import { join } from 'path';
 
 const I18N_DIR = 'src/assets/i18n';
 const FROM = 'en';
-const TO = ['fr', 'de', 'es', 'ja'];
+const TO = ['es', 'pt', 'de', 'ja'];
 
 const namespaces = readdirSync(I18N_DIR, { withFileTypes: true })
   .filter((d) => d.isDirectory())

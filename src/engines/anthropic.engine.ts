@@ -1,7 +1,7 @@
 import { LoquiError } from '../errors.js';
 import type { LoquiConfig, TranslationResult } from '../types.js';
-import { BaseEngine } from './base.engine.js';
-import { fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
+import { BaseEngine, type CallContext } from './base.engine.js';
+import { assertComplete, fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
 
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1';
 const DEFAULT_ANTHROPIC_API_VERSION = '2023-06-01';
@@ -22,6 +22,7 @@ export class AnthropicEngine extends BaseEngine {
     userPrompt: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
     const model = this.config.model || DEFAULT_MODEL;
     const apiVersion = process.env.ANTHROPIC_API_VERSION ?? DEFAULT_ANTHROPIC_API_VERSION;
@@ -30,7 +31,7 @@ export class AnthropicEngine extends BaseEngine {
 
     const body: Record<string, unknown> = {
       model,
-      max_tokens: 8192,
+      max_tokens: deriveMaxTokens(this.config.splitToken),
       temperature: this.config.temperature,
       top_p: this.config.topP,
       system: systemPrompt,
@@ -43,7 +44,7 @@ export class AnthropicEngine extends BaseEngine {
         : {}),
     };
 
-    const response = await fetchWithRetry(
+    const data = (await fetchWithRetry(
       `${ANTHROPIC_API_BASE}/messages`,
       {
         method: 'POST',
@@ -58,16 +59,14 @@ export class AnthropicEngine extends BaseEngine {
         engineName: 'Anthropic',
         maxRetries: MAX_RETRIES,
         timeoutMs: this.config.timeout ?? 120_000,
-        onRateLimited: this.getRateLimitSignal(),
-        ...this.retryHooks(),
+        ...this.retryHooks(ctx),
       },
-    );
-
-    const data = (await response.json()) as AnthropicResponse;
+    )) as AnthropicResponse;
+    assertComplete(data?.stop_reason, 'Anthropic');
 
     const toolBlock = data?.content?.find((b) => b.type === 'tool_use');
     if (toolBlock?.input) {
-      return this.extractTranslations(toolBlock.input, expectedKeys, targetLocales);
+      return this.extractTranslations(toolBlock.input, expectedKeys, targetLocales, ctx);
     }
 
     const raw = data?.content?.find((b) => b.type === 'text')?.text;
@@ -77,8 +76,28 @@ export class AnthropicEngine extends BaseEngine {
         `Anthropic returned empty response: ${sanitizeForDisplay(JSON.stringify(data))}`,
       );
 
-    return this.parseResponse(raw, expectedKeys, targetLocales);
+    return this.parseResponse(raw, expectedKeys, targetLocales, ctx);
   }
+}
+
+/**
+ * Anthropic requires an explicit max_tokens, and a constant one truncates as soon as
+ * splitToken grows: the reply wraps every translation in JSON, and a translation
+ * usually runs longer than its source. splitToken already budgets the source plus
+ * every target locale (see chunkTranslations), so the locale count is not applied a
+ * second time. The overhead is headroom over that budget: its `length / 4` token
+ * estimate undercounts CJK and Cyrillic, which take more tokens per character. The
+ * floor keeps small chunks workable; the ceiling stays inside current model output
+ * limits. Past the ceiling the response is cut off, which assertComplete reports as
+ * TRUNCATED.
+ */
+const MIN_OUTPUT_TOKENS = 4_096;
+const MAX_OUTPUT_TOKENS = 64_000;
+const OUTPUT_OVERHEAD = 3;
+
+export function deriveMaxTokens(splitToken: number): number {
+  const estimate = Math.ceil(splitToken * OUTPUT_OVERHEAD);
+  return Math.min(Math.max(estimate, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS);
 }
 
 /** Builds an Anthropic tool-use input schema for locale → key → string. */
@@ -91,12 +110,14 @@ export function buildAnthropicInputSchema(locales: string[], keys: string[]): Re
       type: 'object',
       properties: keyProps,
       required: [...keys],
+      additionalProperties: false,
     };
   }
   return {
     type: 'object',
     properties: localeProperties,
     required: [...locales],
+    additionalProperties: false,
   };
 }
 

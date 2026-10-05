@@ -76,11 +76,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Full Node version coverage on Linux (primary platform)
+          # Linux (primary platform) covers the minimum supported Node and the newest release
           - os: ubuntu-latest
-            node: '22'
+            node: '22.12.0'
           - os: ubuntu-latest
             node: '24'
+          - os: ubuntu-latest
+            node: '26'
           # Spot-check path-handling on macOS and Windows with current LTS
           - os: macos-latest
             node: '24'
@@ -98,19 +100,26 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level=high
         if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
-      - run: pnpm run test:ci
+      - id: tests
+        run: pnpm run test:ci
       - run: pnpm run test:coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+      - run: pnpm build
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+      - run: pnpm run check:types
         if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
 
       - uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
-        if: always() && matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        # always() so a failed test run is still reported, but not when the run never started
+        # (an earlier step failed): there is no report then, and that error would bury the real one.
+        if: always() && steps.tests.outcome != 'skipped' && matrix.os == 'ubuntu-latest' && matrix.node == '24'
         with:
           name: Test Results
           path: test-results.xml
           reporter: java-junit
 
   # Stable aggregate context required by the branch ruleset. The matrix job
-  # reports per-cell contexts (e.g. "Build & Test (ubuntu-latest / Node 20)"),
+  # reports per-cell contexts (e.g. "Build & Test (ubuntu-latest / Node 24)"),
   # so this gate provides a single fixed "Build & Test" status to gate merges on.
   build-and-test:
     name: Build & Test

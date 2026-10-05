@@ -17,13 +17,13 @@ const source = JSON.stringify({
   itemCount: '{count, plural, one {# item} other {# items}}',
 });
 
-const result = await translate({
+const { locales } = await translate({
   input: source,   // raw JSON string — detected automatically
   from: 'en',
-  to: ['fr', 'es'],
+  to: ['es', 'pt'],
 });
 
-for (const [locale, json] of Object.entries(result)) {
+for (const [locale, doc] of Object.entries(locales)) {
   console.log(`\n--- ${locale} ---`);
-  console.log(json);
+  console.log(JSON.stringify(doc, null, 2));
 }

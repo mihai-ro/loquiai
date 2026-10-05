@@ -29,6 +29,18 @@ describe('LoquiError', () => {
     assert.equal(err.cause, cause);
   });
 
+  test('can carry the result of a failed run', () => {
+    const result = {
+      locales: { es: {} },
+      stats: { keysTranslated: 0, apiRequests: 0, elapsedMs: 0, warnings: [], failedChunks: 1 },
+      removed: { es: [] },
+    };
+    const err = new LoquiError('CHUNK_FAILED', 'chunk 1 failed', { result });
+    assert.equal(err.result, result);
+    assert.equal(new LoquiError('CHUNK_FAILED', 'chunk 1 failed').result, undefined);
+    assert.equal('partial' in err, false);
+  });
+
   test('passes instanceof check after serialization round-trip', () => {
     const err = new LoquiError('PARSE_ERROR', 'oops');
     const wrapped = new Error('wrapper', { cause: err });

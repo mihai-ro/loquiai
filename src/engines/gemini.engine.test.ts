@@ -287,3 +287,31 @@ describe('GeminiEngine — a 429 that says how long to wait', () => {
     assert.equal(result.fr.keys.greeting, 'Bonjour');
   });
 });
+
+describe('the model a Gemini engine asks for', () => {
+  before(() => {
+    process.env.GEMINI_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  async function urlFor(model?: string): Promise<string> {
+    const engine = new GeminiEngine({ ...CONFIG_DEFAULTS, engine: 'gemini', model });
+    let url = '';
+    engine._setFetch(async (calledUrl) => {
+      url = calledUrl;
+      return new Response(successBody);
+    });
+    await engine.translateChunk(req(mockChunk, ['fr']));
+    return url;
+  }
+
+  test('is its own default when none is set', async () => {
+    assert.match(await urlFor(), /\/models\/gemini-2\.5-flash:generateContent$/);
+  });
+
+  test('is the configured one when there is one', async () => {
+    assert.match(await urlFor('gemini-test'), /\/models\/gemini-test:generateContent$/);
+  });
+});

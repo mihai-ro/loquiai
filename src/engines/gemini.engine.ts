@@ -1,5 +1,5 @@
 import { LoquiError } from '../errors.js';
-import type { LoquiConfig, TranslationResult } from '../types.js';
+import { DEFAULT_MODELS, type LoquiConfig, type TranslationResult } from '../types.js';
 import { BaseEngine, type CallContext } from './base.engine.js';
 import { assertComplete, fetchWithRetry, sanitizeForDisplay } from './utils.js';
 
@@ -22,7 +22,7 @@ export class GeminiEngine extends BaseEngine {
     targetLocales: string[],
     ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
-    const url = `${GEMINI_API_BASE}/${this.config.model}:generateContent`;
+    const url = `${GEMINI_API_BASE}/${this.config.model ?? DEFAULT_MODELS.gemini}:generateContent`;
     const body = {
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],

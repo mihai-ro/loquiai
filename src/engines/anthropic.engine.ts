@@ -1,11 +1,10 @@
 import { LoquiError } from '../errors.js';
-import type { LoquiConfig, TranslationResult } from '../types.js';
+import { DEFAULT_MODELS, type LoquiConfig, type TranslationResult } from '../types.js';
 import { BaseEngine, type CallContext } from './base.engine.js';
 import { assertComplete, fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
 
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1';
 const DEFAULT_ANTHROPIC_API_VERSION = '2023-06-01';
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const MAX_RETRIES = 5;
 // Anthropic has no documented hard limit on tool input_schema size. STRUCTURED_OUTPUT_MAX_PROPS
 // mirrors the OpenAI cap for consistency. Above this limit, falls back to prompt-based JSON.
@@ -55,7 +54,7 @@ export class AnthropicEngine extends BaseEngine {
     targetLocales: string[],
     ctx: CallContext,
   ): Promise<Record<string, TranslationResult>> {
-    const model = this.config.model || DEFAULT_MODEL;
+    const model = this.config.model ?? DEFAULT_MODELS.anthropic;
     const apiVersion = process.env.ANTHROPIC_API_VERSION ?? DEFAULT_ANTHROPIC_API_VERSION;
 
     const useSchema = targetLocales.length * expectedKeys.length <= STRUCTURED_OUTPUT_MAX_PROPS;

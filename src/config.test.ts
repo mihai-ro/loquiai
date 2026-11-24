@@ -5,6 +5,7 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { loadConfig } from './config.js';
 import { LoquiError } from './errors.js';
+import { resolveConfig } from './project.js';
 import { CONFIG_DEFAULTS } from './types.js';
 
 function assertInvalidConfig(fn: () => unknown, pattern?: RegExp): void {
@@ -287,5 +288,27 @@ describe('loadConfig — glossary validation', () => {
     const dir = makeDir();
     writeConfig(dir, { glossary: { noTranslate: ['ok', 7] } });
     assert.throws(() => loadConfig(dir), /'glossary.noTranslate' must be an array of strings/);
+  });
+});
+
+describe('the model of a config', () => {
+  test('is left unset when no file or override names one, so each engine can use its own', () => {
+    const dir = path.join(tmpDir, 'no-model');
+    fs.mkdirSync(dir, { recursive: true });
+    writeConfig(dir, { engine: 'gemini', to: ['es'] });
+
+    assert.equal(loadConfig(dir).model, undefined);
+    assert.equal(CONFIG_DEFAULTS.model, undefined);
+  });
+
+  test('stays unset when an inline override switches the engine over a file config', () => {
+    const dir = path.join(tmpDir, 'switch-engine');
+    fs.mkdirSync(dir, { recursive: true });
+    writeConfig(dir, { engine: 'gemini', to: ['es'] });
+
+    const config = resolveConfig(dir, { engine: 'anthropic' });
+
+    assert.equal(config.engine, 'anthropic');
+    assert.equal(config.model, undefined);
   });
 });

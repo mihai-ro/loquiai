@@ -22,7 +22,7 @@ export interface LoquiConfig {
   /** LLM provider to use for translation. */
   engine: SupportedEngine;
   /** Model name for the selected engine (e.g. 'gemini-2.5-flash', 'gpt-4o'). */
-  model: SupportedModel;
+  model?: SupportedModel;
   /** Default source locale code (e.g. 'en'). Can be overridden per `translate()` call. */
   from?: string;
   /** Default target locale codes (e.g. ['es', 'de']). Can be overridden per `translate()` call. */
@@ -59,7 +59,6 @@ export interface LoquiConfig {
 /** Default configuration values for new projects. */
 export const CONFIG_DEFAULTS: LoquiConfig = {
   engine: 'gemini',
-  model: 'gemini-2.5-flash',
   temperature: 0.1,
   topP: 1,
   concurrency: 8,

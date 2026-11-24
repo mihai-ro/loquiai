@@ -101,7 +101,7 @@ export function validateConfig(config: LoquiConfig, source: string): void {
     );
   }
 
-  if (typeof config.model !== 'string' || config.model.trim() === '') {
+  if (config.model !== undefined && (typeof config.model !== 'string' || config.model.trim() === '')) {
     throw new LoquiError('INVALID_CONFIG', `'model' must be a non-empty string in ${source}`);
   }
 

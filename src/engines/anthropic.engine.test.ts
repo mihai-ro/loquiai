@@ -412,3 +412,31 @@ describe('the output cap of the model', () => {
     assert.deepEqual(second.calls.maxTokens, [16000]);
   });
 });
+
+describe('the model an Anthropic engine asks for', () => {
+  before(() => {
+    process.env.ANTHROPIC_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  async function modelFor(model?: string): Promise<unknown> {
+    const engine = new AnthropicEngine({ ...CONFIG_DEFAULTS, engine: 'anthropic', model });
+    let sent: unknown;
+    engine._setFetch(async (_url, init) => {
+      if (init.method === 'POST') sent = (JSON.parse(init.body as string) as Record<string, unknown>).model;
+      return new Response(toolUseBody);
+    });
+    await engine.translateChunk(req(mockChunk, ['fr']));
+    return sent;
+  }
+
+  test('is its own default when none is set', async () => {
+    assert.equal(await modelFor(), 'claude-sonnet-4-6');
+  });
+
+  test('is the configured one when there is one', async () => {
+    assert.equal(await modelFor('claude-test-explicit'), 'claude-test-explicit');
+  });
+});

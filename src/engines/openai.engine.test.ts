@@ -246,3 +246,31 @@ describe('OpenAIEngine — a body that is not JSON', () => {
     );
   });
 });
+
+describe('the model an OpenAI engine asks for', () => {
+  before(() => {
+    process.env.OPENAI_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  async function modelFor(model?: string): Promise<unknown> {
+    const engine = new OpenAIEngine({ ...CONFIG_DEFAULTS, engine: 'openai', model });
+    let sent: unknown;
+    engine._setFetch(async (_url, init) => {
+      sent = (JSON.parse(init.body as string) as Record<string, unknown>).model;
+      return new Response(successBody);
+    });
+    await engine.translateChunk(req(mockChunk, ['fr']));
+    return sent;
+  }
+
+  test('is its own default when none is set', async () => {
+    assert.equal(await modelFor(), 'gpt-4o');
+  });
+
+  test('is the configured one when there is one', async () => {
+    assert.equal(await modelFor('gpt-test'), 'gpt-test');
+  });
+});

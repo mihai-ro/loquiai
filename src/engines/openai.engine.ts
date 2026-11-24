@@ -1,5 +1,5 @@
 import { LoquiError } from '../errors.js';
-import type { LoquiConfig, TranslationResult } from '../types.js';
+import { DEFAULT_MODELS, type LoquiConfig, type TranslationResult } from '../types.js';
 import { BaseEngine, type CallContext } from './base.engine.js';
 import { assertComplete, fetchWithRetry, STRUCTURED_OUTPUT_MAX_PROPS, sanitizeForDisplay } from './utils.js';
 
@@ -33,7 +33,7 @@ export class OpenAIEngine extends BaseEngine {
       : { type: 'json_object' };
 
     const body = {
-      model: this.config.model,
+      model: this.config.model ?? DEFAULT_MODELS.openai,
       temperature: this.config.temperature,
       top_p: this.config.topP,
       response_format,

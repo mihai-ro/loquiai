@@ -101,6 +101,7 @@ Config file is auto-discovered as `.loqui.json` in the current directory.
 
 ```
 loqui init                    Interactive setup — creates .loqui.json in the current directory
+loqui migrate [options]       Convert v2 hash sidecars and translation memory to v3 (run once)
 
 loqui [input] [options]
 
@@ -368,7 +369,7 @@ try {
 | `reviewChunk(chunk, initial, locales, from, ns, glossary)`  | `reviewChunk(req)`; `req` adds `initial`             |
 | the engine's optional logger and rate-limit setters         | removed: use `req.log`, and call `req.onRateLimited()` on a 429 |
 | `BaseEngine` subclass overriding `makeCall` or calling `parseResponse` | both take the request as a last argument, for its `log` and `onRateLimited` |
-| hash sidecar `{ key: hash }`                                | `{ locale: { key: hash } }`; a v2 file is converted on the first run |
+| hash sidecar `{ key: hash }`; translation memory keyed by 8-character hashes | run `loqui migrate` once; v3 refuses a v2 sidecar |
 | `translateObject({ hashes: { key: hash } })`                | `hashes: { es: { key: hash } }`                      |
 | CLI: several locales as JSON strings inside JSON            | one JSON document                                    |
 | CLI: `--diff` / `--validate` report on stderr               | on stdout                                            |
@@ -573,9 +574,16 @@ pruned, so the sidecar tracks the source rather than growing forever.
 Several inputs can share one `--hash-file`. Each input prunes only the keys it wrote,
 so the others' entries survive.
 
-A v2 sidecar (one flat map of hashes) is read as the hashes of every locale in `--to`
-and rewritten per locale. A locale with no hashes of its own yet keeps using the v2
-ones, so the locales can migrate in separate runs.
+v3 refuses a v2 sidecar (one flat map of hashes). Convert it once, naming every target
+locale and every input that shares it:
+
+```sh
+loqui migrate --to es,pt,de --input common.json --input admin.json --hash-file .cache/hashes.json
+```
+
+The same run moves translation-memory entries to v3 keys, in the memory file next to each
+input or in the one `--translation-memory-file` names. An entry whose source string is in
+none of the inputs is dropped.
 
 ```sh
 loqui --input en.json --from en --to es,de --output ./i18n/{locale}.json --incremental

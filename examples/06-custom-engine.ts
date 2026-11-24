@@ -12,13 +12,10 @@
  *   npx ts-node examples/06-custom-engine.ts
  */
 
-import { translate, EngineAdapter, TranslationChunk, TranslationResult } from '@mihairo/loqui';
+import { translate, EngineAdapter, TranslateChunkRequest, TranslationResult } from '@mihairo/loqui';
 
 const mockEngine: EngineAdapter = {
-  async translateChunk(
-    chunk: TranslationChunk,
-    targetLocales: string[],
-  ): Promise<Record<string, TranslationResult>> {
+  async translateChunk({ chunk, targetLocales }: TranslateChunkRequest): Promise<Record<string, TranslationResult>> {
     const result: Record<string, TranslationResult> = {};
     for (const locale of targetLocales) {
       const keys: Record<string, string> = {};
@@ -32,14 +29,14 @@ const mockEngine: EngineAdapter = {
   },
 };
 
-const result = await translate({
+const { locales } = await translate({
   input: JSON.stringify({ greeting: 'Hello', farewell: 'Goodbye' }),
   from: 'en',
-  to: ['fr', 'de'],
+  to: ['es', 'de'],
   engine: mockEngine,
 });
 
-for (const [locale, json] of Object.entries(result)) {
+for (const [locale, doc] of Object.entries(locales)) {
   console.log(`\n--- ${locale} ---`);
-  console.log(json);
+  console.log(JSON.stringify(doc, null, 2));
 }

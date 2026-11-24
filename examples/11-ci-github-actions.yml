@@ -40,7 +40,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies
@@ -56,7 +56,7 @@ jobs:
           npx @mihairo/loqui \
             --input src/assets/i18n/en.json \
             --from en \
-            --to fr,de,es,ja,pt \
+            --to es,pt,de,ja \
             --output "src/assets/i18n/{locale}.json" \
             --incremental \
             $FORCE_FLAG

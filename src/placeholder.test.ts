@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { maskPlaceholders, restorePlaceholders } from './placeholder.js';
+import { IcuMaskError, maskPlaceholders, restorePlaceholders } from './placeholder.js';
 
 describe('maskPlaceholders', () => {
   test('masks {{double mustache}} tokens', () => {
@@ -24,11 +24,68 @@ describe('maskPlaceholders', () => {
     assert.equal(Object.keys(map).length, 2);
   });
 
-  test('masks ICU plural blocks as a single token', () => {
+  test('masks only the structure of an ICU plural block and leaves its branch text visible', () => {
     const input = '{count, plural, =1 {# item} other {# items}}';
-    const { map } = maskPlaceholders(input);
-    assert.equal(Object.keys(map).length, 1, 'whole block should be one mask token');
-    assert.equal(Object.values(map)[0], input);
+    const { masked, map } = maskPlaceholders(input);
+    assert.equal(masked, '⟦0⟧⟦1⟧ item⟦2⟧⟦3⟧ items⟦4⟧');
+    assert.deepEqual(Object.values(map), ['{count, plural, =1 {', '#', '} other {', '#', '}}']);
+    assert.equal(restorePlaceholders(masked, map), input);
+  });
+
+  test('masks the header offset, the selectors and what sits inside a branch', () => {
+    const input = '{n, plural, offset:1 =0 {none} one {# {name}} other {# <b>x</b>}}';
+    const { masked, map } = maskPlaceholders(input);
+    assert.equal(masked, '⟦0⟧none⟦1⟧⟦2⟧ ⟦6⟧⟦3⟧⟦4⟧ ⟦7⟧x⟦8⟧⟦5⟧');
+    assert.equal(map['⟦0⟧'], '{n, plural, offset:1 =0 {');
+    assert.equal(map['⟦6⟧'], '{name}');
+    assert.equal(restorePlaceholders(masked, map), input);
+  });
+
+  test('masks a block nested in a branch the same way, and # inside it', () => {
+    const input = '{c, plural, one {a {g, select, male {he has #} other {she has #}} item} other {x}}';
+    const { masked, map } = maskPlaceholders(input);
+    assert.ok(!/plural|select|male|other/.test(masked.replace(/he|she/g, '')), masked);
+    assert.match(masked, /he has ⟦\d+⟧/);
+    assert.equal(restorePlaceholders(masked, map), input);
+  });
+
+  test('masks a variable that opens a branch, which `{{` would otherwise read as a mustache', () => {
+    const input = '{count, plural, one {{count} file} other {{count} files}}';
+    const { masked, map } = maskPlaceholders(input);
+    assert.ok(!masked.includes('{') && !masked.includes('}'), masked);
+    assert.equal(Object.values(map).filter((token) => token === '{count}').length, 2);
+    assert.match(masked, / file/);
+    assert.equal(restorePlaceholders(masked, map), input);
+  });
+
+  test('masks a mustache inside a branch as one token', () => {
+    const input = '{count, plural, one {{{name}} item} other {# items}}';
+    const { masked, map } = maskPlaceholders(input);
+    assert.deepEqual(
+      Object.values(map).filter((token) => token.includes('name')),
+      ['{{name}}'],
+    );
+    assert.match(masked, / item/);
+    assert.equal(restorePlaceholders(masked, map), input);
+  });
+
+  test('masks a mustache outside any ICU block as one token', () => {
+    const { masked, map } = maskPlaceholders('Hello {{name}}');
+    assert.equal(masked, 'Hello ⟦0⟧');
+    assert.deepEqual(map, { '⟦0⟧': '{{name}}' });
+  });
+
+  test('round-trips a block nested directly after a case brace', () => {
+    const input = '{count, plural, one {{g, select, male {he} other {they}}} other {many}}';
+    const { masked, map } = maskPlaceholders(input);
+    assert.match(masked, /he/);
+    assert.ok(!/plural|select|male/.test(masked), masked);
+    assert.equal(restorePlaceholders(masked, map), input);
+  });
+
+  test('leaves # visible outside a plural, where it is only text', () => {
+    const { masked } = maskPlaceholders('{g, select, a {Item #1} other {Item #2}}');
+    assert.match(masked, /Item #1/);
   });
 
   test('masks HTML tags', () => {
@@ -87,5 +144,53 @@ describe('restorePlaceholders', () => {
     const original = `Visit our <a href='{knowledgeBaseUrl}' target='_blank'>Help Desk</a> for help.`;
     const { masked, map } = maskPlaceholders(original);
     assert.equal(restorePlaceholders(masked, map), original);
+  });
+});
+
+describe('maskPlaceholders — ICU block limit', () => {
+  test('masks a value with many ICU blocks', () => {
+    const value = Array.from({ length: 200 }, (_, i) => `{n${i}, plural, one {#} other {#}}`).join(' ');
+    const result = maskPlaceholders(value);
+
+    assert.equal(Object.keys(result.map).length, 200 * 5);
+    assert.ok(!result.masked.includes('plural'), 'every block should be masked');
+  });
+
+  test('refuses a value past the limit instead of half-masking it', () => {
+    const value = Array.from({ length: 1001 }, (_, i) => `{n${i}, plural, one {#} other {#}}`).join(' ');
+
+    assert.throws(
+      () => maskPlaceholders(value),
+      (err: unknown) => err instanceof Error && /ICU blocks/.test(err.message),
+    );
+  });
+});
+
+describe('maskPlaceholders — unbalanced ICU block', () => {
+  const UNBALANCED = '{g, select, male {he} other {they}} bought {n, plural, one {# item} other {# items}';
+
+  test('refuses a value with an unclosed block instead of sending it unmasked', () => {
+    assert.throws(
+      () => maskPlaceholders(UNBALANCED),
+      (err: unknown) => err instanceof IcuMaskError && /ICU block/.test(err.message),
+    );
+  });
+
+  test('refuses a block that closes too early the same way', () => {
+    assert.throws(() => maskPlaceholders('{n, plural, one {# item} other {# items'), IcuMaskError);
+  });
+
+  test('raises the same error class past the block limit', () => {
+    const value = Array.from({ length: 1001 }, (_, i) => `{n${i}, plural, one {#} other {#}}`).join(' ');
+
+    assert.throws(() => maskPlaceholders(value), IcuMaskError);
+  });
+
+  test('a bad custom pattern is not an ICU failure', () => {
+    assert.throws(
+      () => maskPlaceholders('Hello', ['(']),
+      (err: unknown) =>
+        err instanceof Error && !(err instanceof IcuMaskError) && /Invalid placeholder pattern/.test(err.message),
+    );
   });
 });

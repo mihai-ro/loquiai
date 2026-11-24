@@ -12,14 +12,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
       - name: Translate i18n files
-        run: npx @mihairo/loqui --input src/i18n/en.json --from en --to fr,de,es --output src/i18n/{locale}.json --incremental --glossary
+        run: npx @mihairo/loqui --input src/i18n/en.json --from en --to es,pt,de --output src/i18n/{locale}.json --incremental --translation-memory
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
@@ -30,5 +30,5 @@ jobs:
           commit-message: 'chore: update i18n translations'
           branch: i18n/update
           body: |
-            Automated translation updates for locales: fr, de, es
+            Automated translation updates for locales: es, pt, de
           delete-branch: true

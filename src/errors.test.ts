@@ -29,6 +29,25 @@ describe('LoquiError', () => {
     assert.equal(err.cause, cause);
   });
 
+  test('can carry the result of a failed run', () => {
+    const result = {
+      locales: { es: {} },
+      stats: {
+        keysTranslated: 0,
+        apiRequests: 0,
+        elapsedMs: 0,
+        warnings: [],
+        failedChunks: 1,
+        plan: { requests: 0, keys: {} },
+      },
+      removed: { es: [] },
+    };
+    const err = new LoquiError('CHUNK_FAILED', 'chunk 1 failed', { result });
+    assert.equal(err.result, result);
+    assert.equal(new LoquiError('CHUNK_FAILED', 'chunk 1 failed').result, undefined);
+    assert.equal('partial' in err, false);
+  });
+
   test('passes instanceof check after serialization round-trip', () => {
     const err = new LoquiError('PARSE_ERROR', 'oops');
     const wrapped = new Error('wrapper', { cause: err });
@@ -47,6 +66,10 @@ describe('EXIT_CODES', () => {
     'PARSE_ERROR',
     'CHUNK_FAILED',
     'INVALID_CONFIG',
+    'TRUNCATED',
+    'INVALID_USAGE',
+    'VALIDATION_FAILED',
+    'INPUT_NOT_FOUND',
   ];
 
   test('every LoquiErrorCode has a unique exit code', () => {
@@ -72,5 +95,10 @@ describe('EXIT_CODES', () => {
 
   test('INVALID_CONFIG maps to 9', () => {
     assert.equal(EXIT_CODES.INVALID_CONFIG, 9);
+  });
+
+  test('VALIDATION_FAILED maps to 12 and INPUT_NOT_FOUND to 13', () => {
+    assert.equal(EXIT_CODES.VALIDATION_FAILED, 12);
+    assert.equal(EXIT_CODES.INPUT_NOT_FOUND, 13);
   });
 });

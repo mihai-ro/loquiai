@@ -1,12 +1,20 @@
 import { inspect } from 'node:util';
 import { LoquiError } from '../errors.js';
-import type { LoquiConfig, TranslationChunk, TranslationResult } from '../types.js';
+import type {
+  LoquiConfig,
+  ReviewChunkRequest,
+  TranslateChunkRequest,
+  TranslationChunk,
+  TranslationResult,
+} from '../types.js';
 import { type RetryOptions, sanitizeForDisplay } from './utils.js';
+
+/** The part of a request a transport needs: where to report, and whom to tell about a 429. */
+export type CallContext = Pick<TranslateChunkRequest, 'log' | 'onRateLimited'>;
 
 export abstract class BaseEngine {
   protected config: LoquiConfig;
   #apiKey: string;
-  #rateLimitSignal: (() => void) | undefined;
   #fetchFn: RetryOptions['fetchFn'];
   #sleepFn: RetryOptions['sleepFn'];
 
@@ -17,15 +25,6 @@ export abstract class BaseEngine {
 
   getApiKey(): string {
     return this.#apiKey;
-  }
-
-  /** wired by the AIMD concurrency pool so that 429 events reduce the active window. */
-  setRateLimitSignal(fn: () => void): void {
-    this.#rateLimitSignal = fn;
-  }
-
-  protected getRateLimitSignal(): (() => void) | undefined {
-    return this.#rateLimitSignal;
   }
 
   /**
@@ -40,8 +39,9 @@ export abstract class BaseEngine {
     this.#sleepFn = sleepFn;
   }
 
-  protected retryHooks(): Pick<RetryOptions, 'fetchFn' | 'sleepFn'> {
-    return { fetchFn: this.#fetchFn, sleepFn: this.#sleepFn };
+  /** The retry options a call shares: this call's log and 429 signal, and the test-injected transport. */
+  protected retryHooks(ctx: CallContext): Pick<RetryOptions, 'fetchFn' | 'sleepFn' | 'log' | 'onRateLimited'> {
+    return { fetchFn: this.#fetchFn, sleepFn: this.#sleepFn, log: ctx.log, onRateLimited: ctx.onRateLimited };
   }
 
   [inspect.custom](): string {
@@ -54,41 +54,34 @@ export abstract class BaseEngine {
     userPrompt: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Promise<Record<string, TranslationResult>>;
 
-  translateChunk(
-    chunk: TranslationChunk,
-    targetLocales: string[],
-    sourceLocale: string,
-    namespace: string,
-    glossaryBlock = '',
-  ): Promise<Record<string, TranslationResult>> {
-    const system = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
-    const withGlossary = glossaryBlock ? `${system}\n${glossaryBlock}` : system;
+  translateChunk(req: TranslateChunkRequest): Promise<Record<string, TranslationResult>> {
+    const { chunk, targetLocales, sourceLocale } = req;
     return this.makeCall(
-      withGlossary,
+      this.#systemPromptFor(req),
       this.buildUserPrompt(chunk, targetLocales, sourceLocale),
       Object.keys(chunk.keys),
       targetLocales,
+      req,
     );
   }
 
-  reviewChunk(
-    chunk: TranslationChunk,
-    initial: Record<string, TranslationResult>,
-    targetLocales: string[],
-    sourceLocale: string,
-    namespace: string,
-    glossaryBlock = '',
-  ): Promise<Record<string, TranslationResult>> {
-    const system = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
-    const withGlossary = glossaryBlock ? `${system}\n${glossaryBlock}` : system;
+  reviewChunk(req: ReviewChunkRequest): Promise<Record<string, TranslationResult>> {
+    const { chunk, initial, targetLocales, sourceLocale } = req;
     return this.makeCall(
-      withGlossary,
+      this.#systemPromptFor(req),
       this.buildReviewPrompt(chunk, initial, targetLocales, sourceLocale),
       Object.keys(chunk.keys),
       targetLocales,
+      req,
     );
+  }
+
+  #systemPromptFor({ targetLocales, sourceLocale, namespace, glossaryBlock = '' }: TranslateChunkRequest): string {
+    const system = this.buildSystemPrompt(targetLocales, sourceLocale, namespace);
+    return glossaryBlock ? `${system}\n${glossaryBlock}` : system;
   }
 
   protected buildSystemPrompt(targetLocales: string[], sourceLocale: string, namespace: string): string {
@@ -162,6 +155,7 @@ export abstract class BaseEngine {
     raw: string,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Record<string, TranslationResult> {
     const cleaned = raw
       .replace(/^```(?:json)?\n/i, '')
@@ -175,21 +169,20 @@ export abstract class BaseEngine {
       throw new LoquiError('PARSE_ERROR', `Engine returned invalid JSON:\n${sanitizeForDisplay(raw)}`);
     }
 
-    return this.extractTranslations(parsed, expectedKeys, targetLocales);
+    return this.extractTranslations(parsed, expectedKeys, targetLocales, ctx);
   }
 
   protected extractTranslations(
     parsed: Record<string, unknown>,
     expectedKeys: string[],
     targetLocales: string[],
+    ctx: CallContext,
   ): Record<string, TranslationResult> {
     const result: Record<string, TranslationResult> = {};
     for (const locale of targetLocales) {
       const localeData = parsed[locale];
       if (!localeData || typeof localeData !== 'object') {
-        process.stderr.write(
-          `\x1b[33m[❗️] Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty\x1b[0m\n`,
-        );
+        ctx.log('warn', `Engine response missing locale "${locale}" — all ${expectedKeys.length} key(s) will be empty`);
         result[locale] = {
           keys: Object.fromEntries(expectedKeys.map((k) => [k, ''])),
         };
@@ -199,8 +192,9 @@ export abstract class BaseEngine {
       for (const key of expectedKeys) {
         const val = (localeData as Record<string, unknown>)[key];
         if (typeof val !== 'string') {
-          process.stderr.write(
-            `\x1b[33m[❗️] Engine response key "${key}" for locale "${locale}" is not a string (got ${typeof val}) — using empty string\x1b[0m\n`,
+          ctx.log(
+            'warn',
+            `Engine response key "${key}" for locale "${locale}" is not a string (got ${typeof val}) — using empty string`,
           );
         }
         keys[key] = typeof val === 'string' ? val : '';

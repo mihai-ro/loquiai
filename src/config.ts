@@ -74,6 +74,28 @@ function parseFile(filePath: string): LoquiConfig {
   return config;
 }
 
+/**
+ * Target locales key plain objects all through a run, where a `__proto__` key replaces
+ * the object's prototype instead of adding an entry: that locale would drop out of the
+ * result without an error.
+ */
+export function validateTargets(to: string[]): void {
+  if (to.some((locale) => locale.trim() === '')) {
+    throw new LoquiError('INVALID_CONFIG', 'a target locale is empty: check --to for a stray comma');
+  }
+  if (to.includes('__proto__')) {
+    throw new LoquiError('INVALID_CONFIG', "'__proto__' is not a valid target locale");
+  }
+  // The hash sidecar keeps `$owners` beside the locales, so a locale starting with `$` could collide with it.
+  const reserved = to.find((locale) => locale.startsWith('$'));
+  if (reserved !== undefined) {
+    throw new LoquiError(
+      'INVALID_CONFIG',
+      `'${reserved}' is not a valid target locale: names starting with '$' are reserved`,
+    );
+  }
+}
+
 export function validateConfig(config: LoquiConfig, source: string): void {
   if (!['gemini', 'openai', 'anthropic'].includes(config.engine)) {
     throw new LoquiError(
@@ -82,7 +104,7 @@ export function validateConfig(config: LoquiConfig, source: string): void {
     );
   }
 
-  if (typeof config.model !== 'string' || config.model.trim() === '') {
+  if (config.model !== undefined && (typeof config.model !== 'string' || config.model.trim() === '')) {
     throw new LoquiError('INVALID_CONFIG', `'model' must be a non-empty string in ${source}`);
   }
 

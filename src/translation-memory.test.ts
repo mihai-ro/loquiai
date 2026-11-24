@@ -3,9 +3,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
+import { LoquiError } from './errors.js';
+import { hashValue } from './hasher.js';
 import {
   loadTranslationMemory,
   lookupTranslationMemory,
+  memoryKey,
   saveTranslationMemory,
   updateTranslationMemory,
 } from './translation-memory.js';
@@ -19,15 +22,72 @@ describe('translationMemory', () => {
   });
 
   it('loadTranslationMemory returns empty object when file does not exist', () => {
-    const tm = loadTranslationMemory('/nonexistent/path.json');
-    assert.deepStrictEqual(tm, {});
+    assert.deepStrictEqual(loadTranslationMemory('/nonexistent/path.json'), { memory: {}, owners: {} });
   });
 
   it('loadTranslationMemory loads existing translation memory', () => {
-    const data = { abc123: { fr: 'bonjour', de: 'hallo' } };
+    const data = { [memoryKey('hello', 'greeting', 'en')]: { fr: 'bonjour', de: 'hallo' } };
     fs.writeFileSync(tmPath, JSON.stringify(data, null, 2));
-    const tm = loadTranslationMemory(tmPath);
-    assert.deepStrictEqual(tm, data);
+    assert.deepStrictEqual(loadTranslationMemory(tmPath).memory, data);
+  });
+
+  it('loadTranslationMemory refuses a file with a key in the v2 format, naming the file and loqui migrate', () => {
+    fs.writeFileSync(
+      tmPath,
+      JSON.stringify({
+        [memoryKey('hello', 'greeting', 'en')]: { fr: 'bonjour' },
+        '811c9dc5': { fr: 'old one' },
+        e8d4a2b1: { fr: 'old two' },
+      }),
+    );
+
+    assert.throws(
+      () => loadTranslationMemory(tmPath),
+      (err: unknown) =>
+        err instanceof LoquiError &&
+        err.code === 'INVALID_CONFIG' &&
+        err.message.includes(tmPath) &&
+        err.message.includes('2 translation-memory entries') &&
+        err.message.includes('loqui migrate'),
+    );
+  });
+
+  it('memoryKey is 32 lowercase hex characters and stable', () => {
+    assert.match(memoryKey('hello', 'greeting', 'en'), /^[0-9a-f]{32}$/);
+    assert.strictEqual(memoryKey('hello', 'greeting', 'en'), memoryKey('hello', 'greeting', 'en'));
+    assert.notStrictEqual(memoryKey('hello', 'greeting', 'en'), memoryKey('Hello', 'greeting', 'en'));
+    assert.notStrictEqual(memoryKey('hello', 'greeting', 'en'), memoryKey('hello', 'greeting', 'de'), 'another source');
+  });
+
+  it('memoryKey tells one string apart by the parent path of its key, and nothing else', () => {
+    const save = memoryKey('Save', 'buttons.save', 'en');
+
+    assert.notStrictEqual(save, memoryKey('Save', 'menu.save', 'en'), 'another parent');
+    assert.notStrictEqual(save, memoryKey('Save', 'save', 'en'), 'no parent');
+    assert.strictEqual(save, memoryKey('Save', 'buttons.keep', 'en'), 'a sibling shares the parent');
+    assert.strictEqual(memoryKey('Item', 'list.0', 'en'), memoryKey('Item', 'list.1', 'en'), 'array items share it');
+    assert.notStrictEqual(
+      memoryKey('Save', 'a\\.b.c', 'en'),
+      memoryKey('Save', 'a.b.c', 'en'),
+      'a dot inside a segment is not a level',
+    );
+  });
+
+  it('memoryKey tells apart two strings whose FNV hashes collide', () => {
+    const seen = new Map<string, string>();
+    let pair: [string, string] | undefined;
+    for (let i = 0; !pair && i < 2_000_000; i++) {
+      const candidate = `string ${i}`;
+      const hash = hashValue(candidate);
+      const earlier = seen.get(hash);
+      if (earlier !== undefined) pair = [earlier, candidate];
+      else seen.set(hash, candidate);
+    }
+
+    assert.ok(pair, 'a 32-bit hash collides within a couple of million strings');
+    const [a, b] = pair;
+    assert.strictEqual(hashValue(a), hashValue(b));
+    assert.notStrictEqual(memoryKey(a, 'k', 'en'), memoryKey(b, 'k', 'en'));
   });
 
   it('saveTranslationMemory writes to file', () => {
@@ -43,8 +103,14 @@ describe('translationMemory', () => {
     assert.deepStrictEqual(result, { fr: 'bonjour', de: 'hallo' });
   });
 
-  it('lookupTranslationMemory returns null when locale missing', () => {
+  it('lookupTranslationMemory returns the locales it has when one is missing', () => {
     const tm = { abc123: { fr: 'bonjour' } };
+    const result = lookupTranslationMemory(tm, 'abc123', ['fr', 'de']);
+    assert.deepStrictEqual(result, { fr: 'bonjour' }, 'de going to the engine must not cost fr its cached hit');
+  });
+
+  it('lookupTranslationMemory returns null when no requested locale is cached', () => {
+    const tm = { abc123: { es: 'hola' } };
     const result = lookupTranslationMemory(tm, 'abc123', ['fr', 'de']);
     assert.strictEqual(result, null);
   });
@@ -68,9 +134,8 @@ describe('translationMemory', () => {
   });
 
   it('load/save roundtrip preserves data', () => {
-    const original = { abc123: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
+    const original = { [memoryKey('hello', 'greeting', 'en')]: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
     saveTranslationMemory(tmPath, original);
-    const loaded = loadTranslationMemory(tmPath);
-    assert.deepStrictEqual(loaded, original);
+    assert.deepStrictEqual(loadTranslationMemory(tmPath).memory, original);
   });
 });

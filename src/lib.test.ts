@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { LoquiError } from './errors.js';
 import { hashValue } from './hasher.js';
 import { translate } from './lib.js';
 import { translateJson } from './translator.js';
@@ -10,18 +11,20 @@ import {
   CONFIG_DEFAULTS,
   type EngineAdapter,
   type LoquiConfig,
-  type TranslationChunk,
+  type TranslateChunkRequest,
   type TranslationResult,
 } from './types.js';
+import type { LogFn } from './utils/logger.js';
 
 const config: LoquiConfig = { ...CONFIG_DEFAULTS };
+const silent: LogFn = () => {};
 
 let tmpDir: string;
 let tmpCounter = 0;
 
 function makeEngine(transform: (v: string) => string = (v) => v.toUpperCase()): EngineAdapter {
   return {
-    async translateChunk(chunk: TranslationChunk, targetLocales: string[]): Promise<Record<string, TranslationResult>> {
+    async translateChunk({ chunk, targetLocales }: TranslateChunkRequest): Promise<Record<string, TranslationResult>> {
       const result: Record<string, TranslationResult> = {};
       for (const locale of targetLocales) {
         const keys: Record<string, string> = {};
@@ -39,6 +42,13 @@ function nextTmp(): string {
   return path.join(tmpDir, `test-${tmpCounter++}`);
 }
 
+/** The input file for a document: `translate()` and the CLI take paths only. */
+function inputFile(json: string): string {
+  const file = path.join(tmpDir, `input-${tmpCounter++}.json`);
+  fs.writeFileSync(file, json);
+  return file;
+}
+
 before(async () => {
   tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loqui-test-'));
 });
@@ -48,22 +58,17 @@ after(async () => {
 });
 
 describe('translate — basic functionality', () => {
-  test('returns a locale map with correct keys and valid JSON', async () => {
+  test('returns one document per locale with the translated keys', async () => {
     const result = await translate({
-      input: '{"greeting":"hello","farewell":"goodbye"}',
+      input: inputFile('{"greeting":"hello","farewell":"goodbye"}'),
       from: 'en',
       to: ['fr', 'de'],
       engine: makeEngine(),
     });
 
-    assert.ok(result.fr);
-    assert.ok(result.de);
-
-    const fr = JSON.parse(result.fr);
+    const { fr, de } = result.locales;
     assert.equal(fr.greeting, 'HELLO');
     assert.equal(fr.farewell, 'GOODBYE');
-
-    const de = JSON.parse(result.de);
     assert.equal(de.greeting, 'HELLO');
   });
 
@@ -71,7 +76,7 @@ describe('translate — basic functionality', () => {
     await assert.rejects(
       () =>
         translate({
-          input: '{"greeting": invalid}',
+          input: inputFile('{"greeting": invalid}'),
           from: 'en',
           to: ['fr'],
         }),
@@ -83,10 +88,25 @@ describe('translate — basic functionality', () => {
     await assert.rejects(
       () =>
         translate({
-          input: '{"greeting":"hello"}',
+          input: inputFile('{"greeting":"hello"}'),
           to: ['fr'],
         }),
       (err: Error) => err.message.includes("'from'") || err.message.includes('source locale'),
+    );
+  });
+
+  test('throws on a __proto__ target locale', async () => {
+    await assert.rejects(
+      () => translate({ input: inputFile('{"greeting":"hello"}'), from: 'en', to: '__proto__', engine: makeEngine() }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_CONFIG',
+    );
+  });
+
+  test('rejects a missing input file with INPUT_NOT_FOUND, naming the path', async () => {
+    const missing = path.join(nextTmp(), 'nope.json');
+    await assert.rejects(
+      () => translate({ input: missing, from: 'en', to: 'fr', engine: makeEngine() }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INPUT_NOT_FOUND' && err.message.includes(missing),
     );
   });
 
@@ -94,7 +114,7 @@ describe('translate — basic functionality', () => {
     await assert.rejects(
       () =>
         translate({
-          input: '{"greeting":"hello"}',
+          input: inputFile('{"greeting":"hello"}'),
           from: 'en',
         }),
       (err: Error) => err.message.includes("'to'") || err.message.includes('target locale'),
@@ -108,7 +128,7 @@ describe('translate — dry-run mode', () => {
     const outPath = path.join(dir, '{locale}.json');
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr'],
       output: outPath,
@@ -143,6 +163,7 @@ describe('translate — dry-run mode', () => {
 describe('translate — force mode', () => {
   test('re-translates all keys regardless of existing translations', async () => {
     const result = await translateJson({
+      logger: silent,
       sourceFlat: { greeting: 'hello' },
       from: 'en',
       to: ['fr'],
@@ -163,7 +184,7 @@ describe('translate — output path template', () => {
     const outPath = path.join(dir, '{locale}.json');
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr', 'de'],
       output: outPath,
@@ -184,7 +205,7 @@ describe('translate — output path template', () => {
     const dir = nextTmp();
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr'],
       output: dir,
@@ -203,7 +224,7 @@ describe('translate — output path template', () => {
     };
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr', 'de'],
       output: explicitOutput,
@@ -220,13 +241,13 @@ describe('translate — glossary', () => {
     // A namespace legitimately named "glossary" must not be stripped when the feature is off
     const source = JSON.stringify({ title: 'hello', glossary: { search: 'Search' } });
     const result = await translate({
-      input: source,
+      input: inputFile(source),
       from: 'en',
       to: ['es'],
       config: { ...CONFIG_DEFAULTS },
       engine: makeEngine(),
     });
-    const es = JSON.parse(result.es);
+    const es = result.locales.es;
     assert.ok('glossary' in es, 'glossary key must not be stripped when feature is disabled');
   });
 
@@ -239,14 +260,14 @@ describe('translate — glossary', () => {
     });
 
     const result = await translate({
-      input: sourceWithGlossary,
+      input: inputFile(sourceWithGlossary),
       from: 'en',
       to: ['es'],
       config: { ...CONFIG_DEFAULTS, glossary: {} },
       engine: makeEngine(),
     });
 
-    const es = JSON.parse(result.es);
+    const es = result.locales.es;
     assert.ok('greeting' in es, 'greeting key must be present');
     assert.ok(!('glossary' in es), 'glossary key must be stripped from output');
   });
@@ -254,15 +275,15 @@ describe('translate — glossary', () => {
   test('noTranslate terms in glossary config survive translation verbatim', async () => {
     // Engine uppercases everything — but noTranslate terms must survive as-is
     const result = await translate({
-      input: JSON.stringify({ title: 'Welcome to Loqui today' }),
+      input: inputFile(JSON.stringify({ title: 'Welcome to Loqui today' })),
       from: 'en',
       to: ['es'],
       config: { ...CONFIG_DEFAULTS, glossary: { noTranslate: ['Loqui'] } },
       engine: makeEngine(),
     });
 
-    const es = JSON.parse(result.es);
-    assert.ok(es.title?.includes('Loqui'), 'Loqui must survive translation verbatim');
+    const es = result.locales.es;
+    assert.ok(String(es.title).includes('Loqui'), 'Loqui must survive translation verbatim');
   });
 
   test('rejects invalid inline glossary config before translating', async () => {
@@ -270,7 +291,7 @@ describe('translate — glossary', () => {
     await assert.rejects(
       () =>
         translate({
-          input: JSON.stringify({ title: 'hello' }),
+          input: inputFile(JSON.stringify({ title: 'hello' })),
           from: 'en',
           to: ['es'],
           config: { ...CONFIG_DEFAULTS, glossary: { noTranslate: ['ok', 7] } as never },
@@ -284,7 +305,7 @@ describe('translate — glossary', () => {
     await assert.rejects(
       () =>
         translate({
-          input: JSON.stringify({ title: 'hello' }),
+          input: inputFile(JSON.stringify({ title: 'hello' })),
           from: 'en',
           to: ['es'],
           config: { ...CONFIG_DEFAULTS, glossary: { path: '  ' } },
@@ -299,17 +320,18 @@ describe('translate — incremental mode', () => {
   test('skips engine call for unchanged keys', async () => {
     let callCount = 0;
     const countingEngine: EngineAdapter = {
-      async translateChunk(chunk, targetLocales) {
+      async translateChunk(req) {
         callCount++;
-        return makeEngine().translateChunk(chunk, targetLocales, 'en', 'test');
+        return makeEngine().translateChunk(req);
       },
     };
 
     const source = { greeting: 'Hello' };
     const existing = { fr: { greeting: 'Bonjour' } };
-    const hashStore = { greeting: hashValue('Hello') };
+    const hashStore = { fr: { greeting: hashValue('Hello') } };
 
     await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -327,19 +349,22 @@ describe('translate — incremental mode', () => {
     const source = { greeting: 'Hello!', farewell: 'Goodbye' };
     const existing = { fr: { greeting: 'Bonjour', farewell: 'Au revoir' } };
     const hashStore = {
-      greeting: hashValue('Hello!'), // matches
-      farewell: hashValue('Old value'), // stale
+      fr: {
+        greeting: hashValue('Hello!'), // matches
+        farewell: hashValue('Old value'), // stale
+      },
     };
 
     let capturedChunkKeys: Record<string, string> = {};
     const trackingEngine: EngineAdapter = {
-      async translateChunk(chunk, targetLocales) {
-        capturedChunkKeys = { ...chunk.keys };
-        return makeEngine().translateChunk(chunk, targetLocales, 'en', 'test');
+      async translateChunk(req) {
+        capturedChunkKeys = { ...req.chunk.keys };
+        return makeEngine().translateChunk(req);
       },
     };
 
     await translateJson({
+      logger: silent,
       sourceFlat: source,
       from: 'en',
       to: ['fr'],
@@ -352,5 +377,102 @@ describe('translate — incremental mode', () => {
 
     assert.ok(capturedChunkKeys.farewell !== undefined, 'stale key should be re-translated');
     assert.equal(capturedChunkKeys.greeting, undefined, 'unchanged key should not be sent to engine');
+  });
+});
+
+describe('translate — non-string values survive the round trip', () => {
+  const mixed = {
+    label: 'Hello',
+    items: ['alpha', 'beta'],
+    count: 42,
+    ratio: 0.5,
+    enabled: false,
+    missing: null,
+    empty: [],
+    blank: {},
+    version: '42',
+    nested: { deep: { list: [1, 'two', true, null] } },
+  };
+
+  test('arrays, numbers, booleans and null reach the output file unchanged', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify(mixed), 'utf-8');
+
+    await translate({
+      input,
+      from: 'en',
+      to: ['fr'],
+      output: path.join(dir, '{locale}.json'),
+      engine: makeEngine(),
+    });
+
+    const written = JSON.parse(fs.readFileSync(path.join(dir, 'fr.json'), 'utf-8'));
+
+    assert.deepEqual(written.items, ['ALPHA', 'BETA'], 'arrays stay arrays, element by element');
+    assert.equal(written.count, 42);
+    assert.equal(typeof written.count, 'number');
+    assert.equal(written.ratio, 0.5);
+    assert.equal(written.enabled, false);
+    assert.ok('missing' in written, 'a null value must not lose its key');
+    assert.equal(written.missing, null);
+    assert.deepEqual(written.empty, []);
+    assert.deepEqual(written.blank, {});
+    assert.equal(written.version, '42', 'a numeric-looking string stays a string');
+    assert.equal(typeof written.version, 'string');
+    assert.deepEqual(written.nested.deep.list, [1, 'TWO', true, null]);
+  });
+
+  test('only strings are sent to the engine', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify(mixed), 'utf-8');
+
+    const seen: string[] = [];
+    await translate({
+      input,
+      from: 'en',
+      to: ['fr'],
+      output: path.join(dir, '{locale}.json'),
+      engine: {
+        async translateChunk({ chunk, targetLocales }) {
+          seen.push(...Object.values(chunk.keys));
+          const result: Record<string, TranslationResult> = {};
+          for (const locale of targetLocales) {
+            result[locale] = {
+              keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])),
+            };
+          }
+          return result;
+        },
+      },
+    });
+
+    assert.deepEqual(seen.sort(), ['Hello', 'alpha', 'beta', 'two', '42'].sort());
+  });
+
+  test('writing over the source file preserves its structure', async () => {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, 'en.json');
+    fs.writeFileSync(input, JSON.stringify(mixed), 'utf-8');
+
+    await translate({
+      input,
+      from: 'en',
+      to: ['en'],
+      output: path.join(dir, '{locale}.json'),
+      force: true,
+      engine: makeEngine(),
+    });
+
+    const rewritten = JSON.parse(fs.readFileSync(input, 'utf-8'));
+
+    assert.deepEqual(rewritten.items, ['ALPHA', 'BETA']);
+    assert.equal(rewritten.count, 42);
+    assert.equal(rewritten.missing, null);
+    assert.deepEqual(rewritten.empty, []);
   });
 });

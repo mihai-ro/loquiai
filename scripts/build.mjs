@@ -1,10 +1,11 @@
 import esbuild from 'esbuild';
 
-// ESM builds with code splitting
+// ESM build with code splitting. CommonJS callers load it through require(), which Node 22.12+
+// supports for a module graph without top-level await.
 await esbuild.build({
   bundle: true,
   platform: 'node',
-  target: 'node20',
+  target: 'node22',
   minify: true,
   treeShaking: true,
   splitting: true,
@@ -13,28 +14,3 @@ await esbuild.build({
   entryPoints: ['src/lib.ts', 'src/index.ts'],
   entryNames: '[name]',
 });
-
-// CJS builds (no code splitting support)
-await Promise.all([
-  esbuild.build({
-    bundle: true,
-    platform: 'node',
-    target: 'node20',
-    minify: true,
-    treeShaking: true,
-    format: 'cjs',
-    entryPoints: ['src/lib.ts'],
-    outfile: 'dist/lib.cjs',
-  }),
-  esbuild.build({
-    bundle: true,
-    platform: 'node',
-    target: 'node20',
-    minify: true,
-    treeShaking: true,
-    format: 'cjs',
-    entryPoints: ['src/index.ts'],
-    outfile: 'dist/index.cjs',
-    banner: { js: '#!/usr/bin/env node' },
-  }),
-]);

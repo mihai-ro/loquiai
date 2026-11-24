@@ -4,7 +4,8 @@
   "exclude-after-remap": true,
   "exclude": [
     "**/*.test.ts",
-    "**/index.ts"
+    "dist/**",
+    "scripts/**"
   ],
   "lines": 80,
   "branches": 70,

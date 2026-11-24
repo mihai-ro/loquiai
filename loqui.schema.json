@@ -25,7 +25,7 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Default target locales. Can be overridden per run.",
-      "examples": [["fr", "de", "es"]]
+      "examples": [["es", "pt", "de"]]
     },
     "temperature": {
       "type": "number",

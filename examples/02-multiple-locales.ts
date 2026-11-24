@@ -10,14 +10,14 @@
 
 import { translate } from '@mihairo/loqui';
 
-const result = await translate({
+const { locales, written } = await translate({
   input: './en.json',
   from: 'en',
-  to: ['fr', 'de', 'es', 'ja', 'pt'],
-  output: './i18n/{locale}.json',   // writes i18n/fr.json, i18n/de.json, …
+  to: ['es', 'pt', 'de', 'ja'],
+  output: './i18n/{locale}.json',   // writes i18n/es.json, i18n/pt.json, …
 });
 
-for (const [locale, json] of Object.entries(result)) {
-  const keyCount = Object.keys(JSON.parse(json)).length;
-  console.log(`${locale}: ${keyCount} keys written`);
+for (const [locale, doc] of Object.entries(locales)) {
+  const keyCount = Object.keys(doc).length;
+  console.log(`${locale}: ${keyCount} keys written to ${written[locale]}`);
 }

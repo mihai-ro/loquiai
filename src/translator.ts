@@ -1,21 +1,22 @@
+import { processChunk } from './chunk.js';
+import { ConcurrencyPool, gateFor } from './concurrency-pool.js';
 import { createEngine } from './engines/factory.js';
-import { STRUCTURED_OUTPUT_MAX_PROPS } from './engines/utils.js';
 import { LoquiError } from './errors.js';
-import { buildGlossaryPromptBlock, findTermsInText, maskTerms } from './glossary.js';
-import { buildUpdatedHashStore, hashValue } from './hasher.js';
-import { maskPlaceholders, restorePlaceholders } from './placeholder.js';
-import { lookupTranslationMemory, updateTranslationMemory } from './translation-memory.js';
+import { buildUpdatedHashes } from './hasher.js';
+import { planRun } from './plan.js';
+import { updateTranslationMemory } from './translation-memory.js';
 import type {
   EngineAdapter,
   FlatTranslations,
   GlossaryModel,
-  HashStore,
+  LocaleHashes,
   LoquiConfig,
+  RunLog,
   RunStats,
-  TranslationChunk,
+  RunWarning,
   TranslationMemory,
 } from './types.js';
-import { logger } from './utils/logger.js';
+import type { LogFn } from './utils/logger.js';
 
 export interface TranslateJobOptions {
   sourceFlat: FlatTranslations;
@@ -24,20 +25,53 @@ export interface TranslateJobOptions {
   namespace: string;
   config: LoquiConfig;
   existing?: Record<string, FlatTranslations>;
-  hashStore?: HashStore;
+  hashStore?: LocaleHashes;
   translationMemory?: TranslationMemory;
-  translationMemoryPath?: string;
   glossaryModel?: GlossaryModel;
   force?: boolean;
   dryRun?: boolean;
+  /** per locale, keys the caller has stopped retrying; see `PlanOptions.capped`. */
+  capped?: Record<string, ReadonlySet<string>>;
   engine?: EngineAdapter;
+  /** where the run's messages go. Required: a site that forgets it would log nowhere. */
+  logger: LogFn;
 }
 
 export interface TranslateJobResult {
   translations: Record<string, FlatTranslations>;
-  updatedHashStore: HashStore;
+  updatedHashStore: LocaleHashes;
   updatedTranslationMemory: TranslationMemory;
+  /** per locale, the keys the run turned down. */
+  rejected: Record<string, string[]>;
   stats: RunStats;
+  /**
+   * The run's log. A caller that has something to say after the run, such as the file
+   * layer's note about pruned keys, says it here so it lands in `stats.warnings` too.
+   */
+  log: RunLog;
+  /**
+   * Set when chunks failed. The caller persists what succeeded and then raises this,
+   * so a partial run still leaves its output on disk.
+   */
+  failure?: LoquiError;
+}
+
+/**
+ * The one writer of `stats.warnings`: a warning is recorded in the run's stats and its
+ * message goes to the caller's logger, so the two can never disagree.
+ */
+function createRunLog(stats: RunStats, logger: LogFn): RunLog {
+  // What reaches the plain log is what an engine said: the run's own findings use `warning`.
+  const log: LogFn = (level, message) => {
+    if (level === 'warn') stats.warnings.push({ code: 'ENGINE_RESPONSE', message });
+    logger(level, message);
+  };
+  return Object.assign(log, {
+    warning(warning: RunWarning): void {
+      stats.warnings.push(warning);
+      logger('warn', warning.message);
+    },
+  });
 }
 
 export async function translateJson(opts: TranslateJobOptions): Promise<TranslateJobResult> {
@@ -47,12 +81,9 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     to,
     namespace,
     config,
-    existing = {},
     hashStore = {},
     translationMemory: tmOpt,
-    translationMemoryPath: _translationMemoryPath,
     glossaryModel,
-    force = false,
     dryRun = false,
   } = opts;
 
@@ -61,125 +92,73 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     apiRequests: 0,
     elapsedMs: 0,
     warnings: [],
+    failedChunks: 0,
+    plan: { requests: 0, keys: {} },
   };
+  const log = createRunLog(stats, opts.logger);
   const startTime = Date.now();
 
   const translationMemory = tmOpt ?? {};
+  let failure: LoquiError | undefined;
 
-  // Hashes are source-derived — compute once for all keys, regardless of what needs translating.
-  // This ensures the hash file is always up to date even on "nothing to do" runs.
-  const currentSourceHashes: HashStore = {};
-  const sourceHashesForTm: Record<string, string> = {};
-  for (const [key, value] of Object.entries(sourceFlat)) {
-    const hash = hashValue(value);
-    currentSourceHashes[key] = hash;
-    sourceHashesForTm[key] = hash;
-  }
+  const plan = planRun(opts, translationMemory, log, stats);
+  const { workingTargets, delivered, outstanding, currentSourceHashes, memoryKeys } = plan;
+  const { chunks } = plan;
+  stats.plan = plan.summary;
+  const rejected: Record<string, Set<string>> = Object.fromEntries(to.map((locale) => [locale, new Set<string>()]));
+  const rejectedLists = (): Record<string, string[]> =>
+    Object.fromEntries(Object.entries(rejected).map(([locale, keys]) => [locale, [...keys]]));
 
-  const workingTargets: Record<string, FlatTranslations> = {};
-  const keysToTranslatePerLocale: Record<string, FlatTranslations> = {};
-
-  for (const locale of to) {
-    const existingFlat = existing[locale] ?? {};
-    workingTargets[locale] = { ...existingFlat };
-
-    if (force) {
-      keysToTranslatePerLocale[locale] = { ...sourceFlat };
-    } else {
-      const toTranslate: FlatTranslations = {};
-      for (const key of Object.keys(sourceFlat)) {
-        const existsInTarget = key in existingFlat;
-        const previousHash = hashStore[key];
-        const sourceChanged = previousHash !== undefined && previousHash !== currentSourceHashes[key];
-        if (!existsInTarget || sourceChanged) toTranslate[key] = sourceFlat[key];
-      }
-      if (Object.keys(toTranslate).length > 0) {
-        keysToTranslatePerLocale[locale] = toTranslate;
-      }
-    }
-  }
-
-  const allKeysNeeded = new Set<string>();
-  for (const keys of Object.values(keysToTranslatePerLocale)) {
-    for (const key in keys) allKeysNeeded.add(key);
-  }
-
-  if (allKeysNeeded.size === 0) {
-    logger.info(`[${namespace}]${dryRun ? ' [dry-run]' : ''} Nothing to translate. All locales up to date.`);
+  if (chunks.length === 0) {
     stats.elapsedMs = Date.now() - startTime;
     return {
       translations: workingTargets,
-      updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
+      updatedHashStore: buildUpdatedHashes(hashStore, to, currentSourceHashes, outstanding),
       updatedTranslationMemory: translationMemory,
+      rejected: rejectedLists(),
       stats,
+      log,
     };
   }
-
-  const activeLocales = Object.keys(keysToTranslatePerLocale);
-  logger.info(
-    `[${namespace}]${dryRun ? ' [dry-run]' : ''} Translating ${allKeysNeeded.size} key(s) → ${activeLocales.join(', ')}`,
-  );
-
-  const tmCache: Record<string, Record<string, string>> = {};
-  const keysNeedingTranslation: FlatTranslations = {};
-
-  for (const key of allKeysNeeded) {
-    const hash = sourceHashesForTm[key];
-    const cached = lookupTranslationMemory(translationMemory, hash, activeLocales);
-    if (cached) {
-      tmCache[key] = cached;
-    } else {
-      keysNeedingTranslation[key] = sourceFlat[key];
-    }
-  }
-
-  for (const [key, cached] of Object.entries(tmCache)) {
-    for (const locale of activeLocales) {
-      if (!(locale in workingTargets)) workingTargets[locale] = { ...existing[locale] };
-      workingTargets[locale][key] = cached[locale];
-      stats.keysTranslated++;
-    }
-  }
-
-  if (Object.keys(keysNeedingTranslation).length === 0) {
-    logger.info(`[${namespace}] All ${allKeysNeeded.size} key(s) served from translation memory.`);
-    stats.elapsedMs = Date.now() - startTime;
-    return {
-      translations: workingTargets,
-      updatedHashStore: buildUpdatedHashStore(hashStore, currentSourceHashes),
-      updatedTranslationMemory: translationMemory,
-      stats,
-    };
-  }
-
-  const chunks = chunkTranslations(keysNeedingTranslation, config.splitToken, activeLocales.length);
-  logger.dim(
-    `[${namespace}] ${chunks.length} chunk(s) × ${activeLocales.length} locale(s) = ${dryRun ? '0 (dry-run)' : chunks.length} request(s)`,
-  );
 
   if (!dryRun) {
     const engine = await createEngine(config, opts.engine);
-    const pool = new ConcurrencyPool(config.concurrency);
+    // Runs on the same engine share one limit: a caller who starts several at once asked
+    // for `concurrency` requests, not that many each.
+    const pool = new ConcurrencyPool(config.concurrency, gateFor(opts.engine ?? config.engine));
 
-    // Wire the rate-limit signal so 429 responses from any engine feed back into AIMD.
-    // Note: onSuccess fires once per chunk (not per request). A 429 collapses the window
-    // immediately via setRateLimitSignal; recovery ramps up one step per 10 completed chunks.
-    engine.setRateLimitSignal?.(() => pool.onRateLimited());
+    // A cut-off response is billed in full and then sent again as two. One note per run,
+    // not per chunk: the cost is the same fact however many chunks it happened to.
+    let splitReported = false;
+    const onSplit = (): void => {
+      if (splitReported) return;
+      splitReported = true;
+      log.warning({
+        code: 'CUT_OFF',
+        message: `[${namespace}] Some responses were cut off at the engine's output limit and re-sent in halves. The cut-off ones were still billed; a lower splitToken avoids paying for them.`,
+      });
+    };
 
-    const tasks = chunks.map((chunk, i) => async () => {
+    const tasks = chunks.map(({ chunk, locales }, i) => async () => {
       try {
         await processChunk({
           chunk,
           i,
           total: chunks.length,
           engine,
-          activeLocales,
+          locales,
+          delivered,
+          rejected,
+          onSplit,
           from,
           sourceFlat,
           namespace,
           workingTargets,
           config,
           stats,
+          log,
+          // A 429 narrows this run's pool only: the engine may be shared with other runs.
+          onRateLimited: () => pool.onRateLimited(),
           glossaryModel,
         });
       } catch (err) {
@@ -196,282 +175,56 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     try {
       await pool.run(tasks);
     } catch (err) {
-      if (err instanceof AggregateError) {
-        for (const e of err.errors) {
-          logger.warn(`[${namespace}] ${(e as Error).message}`);
-        }
-        throw new LoquiError('CHUNK_FAILED', `${err.errors.length} chunk(s) failed for [${namespace}]`, { cause: err });
+      if (!(err instanceof AggregateError)) throw err;
+      // Every chunk that did succeed was paid for. Record the failure and carry the
+      // partial result out: the caller writes it, and the hash store below records
+      // only what landed, so the next run retries exactly the gap.
+      for (const e of err.errors) {
+        log.warning({ code: 'CHUNK_FAILED', message: `[${namespace}] ${(e as Error).message}` });
       }
-      throw err;
+      stats.failedChunks = err.errors.length;
+      failure = collapseChunkFailure(err, chunks.length, namespace);
     }
 
-    for (const chunk of chunks) {
-      for (const key of Object.keys(chunk.keys)) {
-        const hash = sourceHashesForTm[key];
-        if (!hash) continue;
-        const translations: Record<string, string> = {};
-        for (const locale of activeLocales) {
-          const translated = workingTargets[locale]?.[key];
-          if (translated) translations[locale] = translated;
-        }
-        if (Object.keys(translations).length === activeLocales.length) {
-          updateTranslationMemory(translationMemory, hash, translations);
-        }
+    for (const locale of to) {
+      for (const key of delivered[locale]) {
+        // Only what the engine delivered this run. A locale's untouched existing
+        // value is not a translation of this source hash and must not be recorded
+        // as one; entries merge across runs, so a partial record still accumulates.
+        updateTranslationMemory(translationMemory, memoryKeys[key], { [locale]: workingTargets[locale][key] });
       }
     }
   }
 
-  const updatedHashStore = buildUpdatedHashStore(hashStore, currentSourceHashes);
+  const updatedHashStore = buildUpdatedHashes(hashStore, to, currentSourceHashes, outstanding);
 
   stats.elapsedMs = Date.now() - startTime;
   return {
     translations: workingTargets,
     updatedHashStore,
     updatedTranslationMemory: translationMemory,
+    rejected: rejectedLists(),
     stats,
+    log,
+    failure,
   };
 }
 
-// AIMD concurrency pool
 /**
- * Adaptive concurrency pool (AIMD — Additive Increase / Multiplicative Decrease).
- *
- * - Starts at the configured concurrency.
- * - Increases the active window by 1 after RAMP_AFTER consecutive successes.
- * - Halves the window (floor 1) on any rate-limit signal from the engine.
- *
- * The pool integrates with EngineAdapter.setRateLimitSignal?: engines call the
- * callback when they observe a 429, which feeds directly into onRateLimited().
+ * Every chunk failing the same non-retryable way is that failure, not a chunking
+ * problem: a bad API key has to exit AUTH so a caller fixes the key instead of
+ * retrying forever. The task wrapper preserves each chunk's code for exactly this.
+ * A partial or mixed failure stays CHUNK_FAILED, which is what it is.
  */
-export class ConcurrencyPool {
-  #window: number;
-  readonly #maxWindow: number;
-  #streak = 0;
-  static readonly #RAMP_AFTER = 10;
-
-  constructor(initial: number) {
-    this.#window = Math.max(1, initial);
-    this.#maxWindow = Math.max(1, initial);
+function collapseChunkFailure(err: AggregateError, chunkCount: number, namespace: string): LoquiError {
+  const { errors } = err;
+  const codes = errors.map((e) => (e instanceof LoquiError ? e.code : undefined));
+  const [first] = codes;
+  // AUTH stops the pool, so fewer errors than chunks is expected there.
+  const everyChunk = errors.length === chunkCount || first === 'AUTH';
+  if (everyChunk && first !== undefined && codes.every((code) => code === first)) {
+    return errors[0] as LoquiError;
   }
-
-  get current(): number {
-    return this.#window;
-  }
-
-  onRateLimited(): void {
-    this.#window = Math.max(1, Math.ceil(this.#window / 2));
-    this.#streak = 0;
-  }
-
-  onSuccess(): void {
-    this.#streak++;
-    if (this.#streak >= ConcurrencyPool.#RAMP_AFTER) {
-      this.#window = Math.min(this.#maxWindow, this.#window + 1);
-      this.#streak = 0;
-    }
-  }
-
-  async run(tasks: (() => Promise<void>)[]): Promise<void> {
-    const executing = new Set<Promise<void>>();
-    const errors: unknown[] = [];
-
-    for (const task of tasks) {
-      const p: Promise<void> = (async () => {
-        try {
-          await task();
-          this.onSuccess();
-        } catch (err) {
-          errors.push(err);
-        }
-      })().finally(() => {
-        executing.delete(p);
-      });
-      executing.add(p);
-      while (executing.size >= this.#window) await Promise.race(executing);
-    }
-    await Promise.all(executing);
-
-    if (errors.length > 0) {
-      throw new AggregateError(errors, `${errors.length} task(s) failed`);
-    }
-  }
-}
-
-// ── internals ────────────────────────────────────────────────────────────────
-
-interface ProcessChunkOptions {
-  chunk: TranslationChunk;
-  i: number;
-  total: number;
-  engine: EngineAdapter;
-  activeLocales: string[];
-  from: string;
-  sourceFlat: FlatTranslations;
-  namespace: string;
-  workingTargets: Record<string, FlatTranslations>;
-  config: LoquiConfig;
-  stats: RunStats;
-  glossaryModel?: GlossaryModel;
-}
-
-// Translations more than 4× the source length are almost certainly hallucinations.
-const MAX_EXPANSION_RATIO = 4;
-
-async function processChunk(opts: ProcessChunkOptions): Promise<void> {
-  const {
-    chunk,
-    i,
-    total,
-    engine,
-    activeLocales,
-    from,
-    sourceFlat,
-    namespace,
-    workingTargets,
-    config,
-    stats,
-    glossaryModel,
-  } = opts;
-
-  const noTranslate = glossaryModel?.noTranslate ?? [];
-  const { maskedChunk, maskMaps } = maskChunk(chunk, config.placeholderPatterns, noTranslate);
-
-  const chunkText = Object.values(chunk.keys).join('\n');
-  const glossaryBlock = glossaryModel ? buildGlossaryPromptBlock(glossaryModel.terms, chunkText, activeLocales) : '';
-
-  let results = await engine.translateChunk(maskedChunk, activeLocales, from, namespace, glossaryBlock);
-  stats.apiRequests++;
-
-  if (config.review && engine.reviewChunk) {
-    results = await engine.reviewChunk(maskedChunk, results, activeLocales, from, namespace, glossaryBlock);
-    stats.apiRequests++;
-  }
-
-  for (const locale of activeLocales) {
-    const localeResult = results[locale];
-    if (!localeResult) continue;
-
-    const restored = restoreChunk(localeResult.keys, maskMaps);
-
-    for (const [key, value] of Object.entries(restored)) {
-      if (!value.trim()) {
-        const w = `[${namespace}→${locale}] Empty translation for key: "${key}"`;
-        logger.warn(w);
-        stats.warnings.push(w);
-        continue;
-      }
-
-      // Re-use the mask map already computed in maskChunk — avoids re-running all placeholder regexes.
-      const originalTokens = Object.values(maskMaps[key] ?? {});
-      const missing = [...new Set(originalTokens)].filter((t) => !value.includes(t));
-      if (missing.length > 0) {
-        const w = `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${missing.join(', ')} — skipped, will retry on next run`;
-        logger.warn(w);
-        stats.warnings.push(w);
-        continue;
-      }
-
-      // Glossary term-lock: the locked target term must appear in the translation.
-      if (glossaryModel) {
-        const sourceTerms = findTermsInText(sourceFlat[key] ?? '', Object.keys(glossaryModel.terms));
-        const missingTerms = sourceTerms.filter((term) => {
-          const locked = glossaryModel.terms[term]?.[locale];
-          return locked && !value.toLowerCase().includes(locked.toLowerCase());
-        });
-        if (missingTerms.length > 0) {
-          const w = `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`;
-          logger.warn(w);
-          stats.warnings.push(w);
-          continue;
-        }
-      }
-
-      const sourceValue = sourceFlat[key] ?? '';
-
-      // Untranslated detection: value identical to source suggests the model
-      // returned the input unchanged. Warn but save — could be a proper noun.
-      if (locale !== from && sourceValue.trim() !== '' && value.trim() === sourceValue.trim()) {
-        const w = `[${namespace}→${locale}] Key "${key}" appears untranslated (identical to source)`;
-        logger.warn(w);
-        stats.warnings.push(w);
-      }
-
-      // Length explosion: ratio > 4× source is almost certainly a hallucination.
-      if (sourceValue.length > 0 && value.length > sourceValue.length * MAX_EXPANSION_RATIO) {
-        const ratio = Math.round(value.length / sourceValue.length);
-        const w = `[${namespace}→${locale}] Key "${key}" translation is ${ratio}× source length — possible hallucination`;
-        logger.warn(w);
-        stats.warnings.push(w);
-      }
-
-      workingTargets[locale][key] = value;
-      stats.keysTranslated++;
-    }
-  }
-
-  logger.dim(`[${namespace}] Chunk ${i + 1}/${total} done`);
-}
-
-function maskChunk(
-  chunk: TranslationChunk,
-  customPatterns?: string[],
-  noTranslate: string[] = [],
-): {
-  maskedChunk: TranslationChunk;
-  maskMaps: Record<string, Record<string, string>>;
-} {
-  const maskedKeys: FlatTranslations = {};
-  const maskMaps: Record<string, Record<string, string>> = {};
-  for (const [key, value] of Object.entries(chunk.keys)) {
-    // 1) mask do-not-translate terms first (T-prefix range: ⟦T0⟧, ⟦T1⟧…)
-    const termMask = maskTerms(value, noTranslate, 0);
-    // 2) mask placeholders on the already-term-masked string (⟦0⟧, ⟦1⟧…)
-    const { masked, map } = maskPlaceholders(termMask.masked, customPatterns);
-    maskedKeys[key] = masked;
-    maskMaps[key] = { ...termMask.map, ...map };
-  }
-  return { maskedChunk: { keys: maskedKeys }, maskMaps };
-}
-
-function restoreChunk(
-  translatedKeys: FlatTranslations,
-  maskMaps: Record<string, Record<string, string>>,
-): FlatTranslations {
-  const restored: FlatTranslations = {};
-  for (const [key, value] of Object.entries(translatedKeys)) {
-    restored[key] = restorePlaceholders(value, maskMaps[key] ?? {});
-  }
-  return restored;
-}
-
-// Exported for unit testing.
-export function chunkTranslations(flat: FlatTranslations, splitToken: number, localeCount: number): TranslationChunk[] {
-  // Cap keys per chunk at floor(STRUCTURED_OUTPUT_MAX_PROPS / localeCount) so that
-  // locales × keys ≤ STRUCTURED_OUTPUT_MAX_PROPS in every chunk, keeping OpenAI
-  // json_schema and Anthropic tool_use active. Gemini's limit is 50 (harder cap)
-  // but its responseMimeType:'application/json' fallback only enforces JSON syntax —
-  // not schema shape; missing/extra keys are possible. extractTranslations handles
-  // that gracefully via per-key warnings and empty-string defaults.
-  const maxKeysPerChunk =
-    localeCount > 0 ? Math.max(1, Math.floor(STRUCTURED_OUTPUT_MAX_PROPS / localeCount)) : STRUCTURED_OUTPUT_MAX_PROPS;
-  const chunks: TranslationChunk[] = [];
-  let current: FlatTranslations = {};
-  let currentTokens = 0;
-  let currentSize = 0;
-
-  for (const [key, value] of Object.entries(flat)) {
-    const entryTokens = Math.ceil((`"${key}": "${value}",\n`.length / 4) * (1 + localeCount));
-    if ((currentTokens + entryTokens > splitToken || currentSize >= maxKeysPerChunk) && currentSize > 0) {
-      chunks.push({ keys: current });
-      current = {};
-      currentTokens = 0;
-      currentSize = 0;
-    }
-    current[key] = value;
-    currentTokens += entryTokens;
-    currentSize++;
-  }
-
-  if (currentSize > 0) chunks.push({ keys: current });
-  return chunks;
+  // What happened to the output is the caller's to say: only it knows whether anything was written.
+  return new LoquiError('CHUNK_FAILED', `${errors.length} chunk(s) failed for [${namespace}].`, { cause: err });
 }

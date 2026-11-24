@@ -1,5 +1,5 @@
 import { processChunk } from './chunk.js';
-import { ConcurrencyPool } from './concurrency-pool.js';
+import { ConcurrencyPool, gateFor } from './concurrency-pool.js';
 import { createEngine } from './engines/factory.js';
 import { LoquiError } from './errors.js';
 import { buildUpdatedHashes } from './hasher.js';
@@ -123,7 +123,9 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
 
   if (!dryRun) {
     const engine = await createEngine(config, opts.engine);
-    const pool = new ConcurrencyPool(config.concurrency);
+    // Runs on the same engine share one limit: a caller who starts several at once asked
+    // for `concurrency` requests, not that many each.
+    const pool = new ConcurrencyPool(config.concurrency, gateFor(opts.engine ?? config.engine));
 
     // A cut-off response is billed in full and then sent again as two. One note per run,
     // not per chunk: the cost is the same fact however many chunks it happened to.

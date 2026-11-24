@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { ConcurrencyPool } from './concurrency-pool.js';
+import { ConcurrencyPool, SharedGate } from './concurrency-pool.js';
 import { LoquiError } from './errors.js';
 
 describe('ConcurrencyPool — AIMD', () => {
@@ -145,5 +145,75 @@ describe('ConcurrencyPool — a refused key', () => {
       (err: unknown) => err instanceof AggregateError && err.errors.every((e) => e instanceof LoquiError),
     );
     assert.ok(started <= 2, `${started} tasks started at window 2`);
+  });
+});
+
+/** Tasks that count how many run at once, holding each for a few ticks so they overlap. */
+function counting(n: number, probe: { current: number; max: number }, work = 5): (() => Promise<void>)[] {
+  return Array.from({ length: n }, () => async () => {
+    probe.current++;
+    probe.max = Math.max(probe.max, probe.current);
+    await new Promise<void>((resolve) => setTimeout(resolve, work));
+    probe.current--;
+  });
+}
+
+describe('SharedGate — runs that share an engine', () => {
+  test('three pools of concurrency 2 never have more than 2 tasks in flight together', async () => {
+    const gate = new SharedGate();
+    const probe = { current: 0, max: 0 };
+
+    await Promise.all([1, 2, 3].map(() => new ConcurrencyPool(2, gate).run(counting(8, probe))));
+
+    assert.equal(probe.max, 2);
+  });
+
+  test('a lone gated pool is as fast as an ungated one: it reaches its own window', async () => {
+    const probe = { current: 0, max: 0 };
+
+    await new ConcurrencyPool(4, new SharedGate()).run(counting(12, probe));
+
+    assert.equal(probe.max, 4);
+  });
+
+  test('when the run with the lowest limit finishes, the waiters go on at the next lowest', async () => {
+    const gate = new SharedGate();
+    const probe = { current: 0, max: 0 };
+    const whileLow = { current: 0, max: 0 };
+    let lowDone = false;
+
+    const low = new ConcurrencyPool(1, gate).run(counting(1, { current: 0, max: 0 }, 40)).then(() => {
+      lowDone = true;
+    });
+    const high = new ConcurrencyPool(3, gate).run(
+      Array.from({ length: 12 }, () => async () => {
+        const during = !lowDone;
+        probe.current++;
+        probe.max = Math.max(probe.max, probe.current);
+        if (during) whileLow.max = Math.max(whileLow.max, probe.current);
+        await new Promise<void>((resolve) => setTimeout(resolve, 15));
+        probe.current--;
+      }),
+    );
+    await Promise.all([low, high]);
+
+    assert.equal(whileLow.max, 1, 'held to the lowest limit while it was there');
+    assert.equal(probe.max, 3, 'and let up to its own once it left');
+  });
+
+  test('a run that throws gives its slots back', async () => {
+    const gate = new SharedGate();
+    const failing = new ConcurrencyPool(1, gate).run(
+      Array.from({ length: 3 }, () => async () => {
+        throw new Error('boom');
+      }),
+    );
+    await assert.rejects(failing, AggregateError);
+    const probe = { current: 0, max: 0 };
+
+    await new ConcurrencyPool(1, gate).run(counting(3, probe));
+
+    assert.equal(probe.max, 1);
+    assert.equal(probe.current, 0);
   });
 });

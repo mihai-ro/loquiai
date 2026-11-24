@@ -164,8 +164,8 @@ describe('translateJson — each key goes only to the locales that need it', () 
       engine: recordingEngine([]),
     });
 
-    assert.deepEqual(updatedTranslationMemory[memoryKey('Text 0')], { ja: 'ja:Text 0', fr: 'fr:Text 0' });
-    assert.deepEqual(updatedTranslationMemory[memoryKey('Text 1')], { ja: 'ja:Text 1' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Text 0', 'k0')], { ja: 'ja:Text 0', fr: 'fr:Text 0' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Text 1', 'k1')], { ja: 'ja:Text 1' });
   });
 });
 
@@ -194,7 +194,7 @@ describe('translateJson — per-locale key isolation', () => {
 
   test('a translation-memory hit is not written to a locale that already had the key', async () => {
     const translationMemory = {
-      [memoryKey('Alpha')]: { fr: 'STALE-FROM-TM-fr', de: 'STALE-FROM-TM-de' },
+      [memoryKey('Alpha', 'alpha')]: { fr: 'STALE-FROM-TM-fr', de: 'STALE-FROM-TM-de' },
     };
 
     const { translations } = await translateJson({
@@ -244,7 +244,7 @@ describe('translateJson — per-locale key isolation', () => {
       engine: makeEngine((v) => `${v}-translated`),
     });
 
-    const alphaEntry = updatedTranslationMemory[memoryKey('Alpha')] ?? {};
+    const alphaEntry = updatedTranslationMemory[memoryKey('Alpha', 'alpha')] ?? {};
     assert.equal(alphaEntry.fr, 'Alpha-translated');
     assert.ok(!('de' in alphaEntry), "de's pre-existing value is not a translation of this source hash");
   });
@@ -451,7 +451,11 @@ describe('translateJson — what an engine hands back', () => {
     assert.equal(translations.fr.a, 'TRANSLATED');
     assert.equal(translations.fr.b, 'KEEP', 'an existing value the run did not ask about must survive');
     assert.ok(!('rogue' in translations.fr), 'an invented key must not reach the output');
-    assert.deepEqual(Object.keys(updatedTranslationMemory), [memoryKey('A')], 'only the delivered key is remembered');
-    assert.deepEqual(updatedTranslationMemory[memoryKey('A')], { fr: 'TRANSLATED' });
+    assert.deepEqual(
+      Object.keys(updatedTranslationMemory),
+      [memoryKey('A', 'a')],
+      'only the delivered key is remembered',
+    );
+    assert.deepEqual(updatedTranslationMemory[memoryKey('A', 'a')], { fr: 'TRANSLATED' });
   });
 });

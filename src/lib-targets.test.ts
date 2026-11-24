@@ -495,7 +495,12 @@ describe('translate — locale and term names that match Object.prototype member
 
     const run = await translateObject(
       { greeting: 'Hello' },
-      { from: 'en', to: ['constructor'], memory: { [memoryKey('Hello')]: { fr: 'Bonjour' } }, engine: counting },
+      {
+        from: 'en',
+        to: ['constructor'],
+        memory: { [memoryKey('Hello', 'greeting')]: { fr: 'Bonjour' } },
+        engine: counting,
+      },
     );
 
     assert.equal(calls, 1);

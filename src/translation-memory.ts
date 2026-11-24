@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { LoquiError } from './errors.js';
 import type { TranslationMemory } from './types.js';
-import { readJson, setOwn, writeJson } from './utils/json.js';
+import { readJson, setOwn, splitFlatKey, writeJson } from './utils/json.js';
 
 const MEMORY_KEY_FORMAT = /^[0-9a-f]{32}$/;
 
@@ -13,12 +13,20 @@ export function isMemoryKey(key: string): boolean {
 }
 
 /**
- * The key a source string is remembered under. A 32-bit hash is fine for noticing that
- * one key's own text changed, but as the identity of a string across a whole project it
- * collides: two different strings would share one translation, silently.
+ * The key a source string is remembered under, in the context of the flat key it sits at.
+ * A 32-bit hash is fine for noticing that one key's own text changed, but as the identity
+ * of a string across a whole project it collides: two different strings would share one
+ * translation, silently.
+ *
+ * The context is the key's parent path, what the model reads around the string: `Save`
+ * under `buttons` and under `menu` can need different words, while siblings and array
+ * items under one parent share an entry. The key's own name and the file's namespace stay
+ * out of it: the first would give every key its own entry, the second would stop inputs
+ * that share a memory file from sharing what they know.
  */
-export function memoryKey(value: string): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, 32);
+export function memoryKey(value: string, flatKey: string): string {
+  const context = splitFlatKey(flatKey).slice(0, -1).join('\0');
+  return createHash('sha256').update(`${value}\0${context}`).digest('hex').slice(0, 32);
 }
 
 /**

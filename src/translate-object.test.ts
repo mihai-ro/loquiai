@@ -43,7 +43,7 @@ describe('translateObject — no disk', () => {
       assert.equal(run.stats.keysTranslated, 2);
       assert.deepEqual(run.removed, { es: [] });
       assert.deepEqual(run.hashes, { es: { a: hashValue('Hello'), 'nested.b': hashValue('World') } });
-      assert.deepEqual(run.memory[memoryKey('Hello')], { es: 'HELLO' });
+      assert.deepEqual(run.memory[memoryKey('Hello', 'a')], { es: 'HELLO' });
       assert.equal(typeof run.locales.es, 'object');
     } finally {
       process.chdir(realCwd);
@@ -221,7 +221,7 @@ describe('translateObject — hashes and memory', () => {
   });
 
   test('memory serves a known string, and the memory handed in is not mutated', async () => {
-    const memory: TranslationMemory = { [memoryKey('Hello')]: { es: 'Hola' } };
+    const memory: TranslationMemory = { [memoryKey('Hello', 'a')]: { es: 'Hola' } };
     const snapshot = JSON.parse(JSON.stringify(memory));
     let calls = 0;
 
@@ -231,7 +231,7 @@ describe('translateObject — hashes and memory', () => {
     );
 
     assert.equal(run.locales.es.a, 'Hola');
-    assert.equal(run.memory[memoryKey('World')].pt, 'WORLD');
+    assert.equal(run.memory[memoryKey('World', 'b')].pt, 'WORLD');
     assert.deepEqual(memory, snapshot, "the caller's memory object was changed");
   });
 });
@@ -292,7 +292,7 @@ describe('translateObject — a chunk failure', () => {
     assert.equal(err.result.locales.es.keep, KEEP.toUpperCase());
     assert.equal(err.result.locales.es.boom, undefined);
     assert.ok(err.result.hashes?.es && 'keep' in err.result.hashes.es && !('boom' in err.result.hashes.es));
-    assert.ok(err.result.memory && memoryKey(KEEP) in err.result.memory);
+    assert.ok(err.result.memory && memoryKey(KEEP, 'keep') in err.result.memory);
     assert.equal(err.result.stats.failedChunks, 1);
     assert.equal(err.result.written, undefined, 'the core writes nothing, so it cannot say what was written');
     assert.ok(err.cause instanceof AggregateError);

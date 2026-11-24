@@ -165,7 +165,7 @@ export function planRun(
   const keysNeedingTranslation: FlatTranslations = {};
 
   for (const key of allKeysNeeded) {
-    const hash = memoryKey(sourceFlat[key]);
+    const hash = memoryKey(sourceFlat[key], key);
     memoryKeys[key] = hash;
     // A locale is active because of some key; that does not make every key its own.
     const localesNeeding = activeLocales.filter((locale) => Object.hasOwn(keysToTranslatePerLocale[locale], key));

@@ -89,9 +89,9 @@ function migrateMemory(file: string, group: MigratedInput[]): string {
   // v2 keyed memory by the 8-character hash of the string, which only the inputs can undo.
   const current = new Map<string, string[]>();
   for (const { sourceFlat } of group) {
-    for (const value of Object.values(sourceFlat)) {
+    for (const [flatKey, value] of Object.entries(sourceFlat)) {
       const hash = hashValue(value);
-      current.set(hash, [...new Set([...(current.get(hash) ?? []), memoryKey(value)])]);
+      current.set(hash, [...new Set([...(current.get(hash) ?? []), memoryKey(value, flatKey)])]);
     }
   }
   const migrated: TranslationMemory = Object.fromEntries(Object.entries(raw).filter(([key]) => isMemoryKey(key)));

@@ -151,7 +151,8 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         if (glossaryModel) {
           const sourceTerms = findTermsInText(sourceFlat[key] ?? '', Object.keys(glossaryModel.terms));
           const missingTerms = sourceTerms.filter((term) => {
-            const locked = glossaryModel.terms[term]?.[locale];
+            const perLocale = glossaryModel.terms[term];
+            const locked = perLocale && Object.hasOwn(perLocale, locale) ? perLocale[locale] : undefined;
             return locked && !value.toLowerCase().includes(locked.toLowerCase());
           });
           if (missingTerms.length > 0) {

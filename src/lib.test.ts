@@ -1346,6 +1346,50 @@ describe('translateObject — keys named like Object.prototype members', () => {
   });
 });
 
+describe('translate — locale and term names that match Object.prototype members', () => {
+  test('a glossary file with a __proto__ term does not touch Object.prototype', async () => {
+    const dir = nextTmp();
+    const glossaryDir = path.join(dir, 'glossary');
+    fs.mkdirSync(glossaryDir, { recursive: true });
+    // written as text: an object literal with a `__proto__` key would set a prototype, not a key
+    fs.writeFileSync(path.join(glossaryDir, 'es.json'), '{"__proto__":"pwned"}', 'utf-8');
+
+    try {
+      const run = await translate({
+        input: JSON.stringify({ a: 'Hello' }),
+        from: 'en',
+        to: ['es'],
+        config: { glossary: { path: glossaryDir } },
+        engine: makeEngine(),
+      });
+
+      assert.equal(({} as Record<string, unknown>).es, undefined, 'Object.prototype was written to');
+      assert.deepEqual(run.locales.es, { a: 'HELLO' });
+    } finally {
+      delete (Object.prototype as Record<string, unknown>).es;
+    }
+  });
+
+  test('a locale named constructor is translated, whatever the memory holds for other locales', async () => {
+    let calls = 0;
+    const engine = makeEngine();
+    const counting: EngineAdapter = {
+      translateChunk: (...args) => {
+        calls++;
+        return engine.translateChunk(...args);
+      },
+    };
+
+    const run = await translateObject(
+      { greeting: 'Hello' },
+      { from: 'en', to: ['constructor'], memory: { [memoryKey('Hello')]: { fr: 'Bonjour' } }, engine: counting },
+    );
+
+    assert.equal(calls, 1);
+    assert.deepEqual(run.locales.constructor, { greeting: 'HELLO' });
+  });
+});
+
 describe('translate — the hash sidecar is kept per locale', () => {
   interface Project {
     dir: string;

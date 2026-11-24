@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { LoquiError } from './errors.js';
 import type { TranslationMemory } from './types.js';
-import { readJson, writeJson } from './utils/json.js';
+import { readJson, setOwn, writeJson } from './utils/json.js';
 
 const MEMORY_KEY_FORMAT = /^[0-9a-f]{32}$/;
 
@@ -61,12 +61,12 @@ export function lookupTranslationMemory(
   hash: string,
   locales: string[],
 ): Record<string, string> | null {
+  if (!Object.hasOwn(tm, hash)) return null;
   const entry = tm[hash];
-  if (!entry) return null;
 
   const result: Record<string, string> = {};
   for (const locale of locales) {
-    if (locale in entry) result[locale] = entry[locale];
+    if (Object.hasOwn(entry, locale)) result[locale] = entry[locale];
   }
   return Object.keys(result).length > 0 ? result : null;
 }
@@ -79,8 +79,6 @@ export function updateTranslationMemory(
   hash: string,
   translations: Record<string, string>,
 ): void {
-  if (!(hash in tm)) {
-    tm[hash] = {};
-  }
+  if (!Object.hasOwn(tm, hash)) setOwn(tm, hash, {});
   Object.assign(tm[hash], translations);
 }

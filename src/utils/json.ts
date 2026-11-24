@@ -212,6 +212,15 @@ export function readJson(filePath: string): Record<string, unknown> {
   return assertJsonObject(parsed, filePath);
 }
 
+/**
+ * Sets an own property, even one named `__proto__`, where plain assignment would replace the
+ * object's prototype. Returns the value so a caller can set and use it in one step.
+ */
+export function setOwn<T>(target: object, key: string, value: T): T {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+  return value;
+}
+
 /** A document is a JSON object: `null`, an array, a string or a number is not one a run can use. */
 export function assertJsonObject(value: unknown, filePath: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {

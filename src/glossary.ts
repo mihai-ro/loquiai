@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { GlossaryConfig, GlossaryModel } from './types.js';
-import { readJson } from './utils/json.js';
+import { readJson, setOwn } from './utils/json.js';
 
 const MASK_PREFIX = '⟦';
 const MASK_SUFFIX = '⟧';
@@ -41,8 +41,8 @@ export function loadGlossaryTerms(
       if (!fs.existsSync(file)) continue;
       const map = readJson(file) as Record<string, string>;
       for (const [term, target] of Object.entries(map)) {
-        if (!(term in terms)) terms[term] = {};
-        terms[term][locale] = target;
+        const perLocale = Object.hasOwn(terms, term) ? terms[term] : setOwn(terms, term, {});
+        setOwn(perLocale, locale, target);
       }
     }
     return terms;
@@ -86,7 +86,7 @@ export function buildGlossaryPromptBlock(
   const lines: string[] = ['Use these exact term translations (glossary):'];
   for (const term of present) {
     const perLocale = targetLocales
-      .filter((l) => terms[term][l])
+      .filter((l) => Object.hasOwn(terms[term], l) && terms[term][l])
       .map((l) => `${l}: ${terms[term][l]}`)
       .join(', ');
     if (perLocale) lines.push(`- "${term}" -> ${perLocale}`);

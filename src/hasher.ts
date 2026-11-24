@@ -8,24 +8,35 @@ export interface Sidecar {
   locales: LocaleHashes;
   /** Owner id → the flat keys that input's source had when it last saved. Empty for a v2 sidecar. */
   owners: Record<string, string[]>;
+  /**
+   * The flat map a v2 sidecar held, kept so a locale that has no hashes of its own yet can
+   * still be compared against it, whichever run converted the file.
+   */
+  v2?: HashStore;
 }
 
 /**
- * Reads the sidecar. A v2 sidecar is a single flat store (its values are strings) and is
- * applied to every locale in `to`: it never said which locale a hash was for, so each of
- * them has to inherit it. Locales outside `to` get nothing. Top-level keys starting with
- * `$` are reserved for the file's own bookkeeping and never read as a locale.
+ * Reads the sidecar. A v2 sidecar is a single flat store (its values are strings): it
+ * never said which locale a hash was for, so it is kept as `v2` and every locale in `to`
+ * without a store of its own inherits a copy. Top-level keys starting with `$` are
+ * reserved for the file's own bookkeeping and never read as a locale.
  */
 export function readSidecar(hashFile: string, to: string[]): Sidecar {
   const raw = readJson(hashFile) as Record<string, unknown>;
-  if (Object.values(raw).some((value) => typeof value === 'string')) {
-    return {
-      locales: Object.fromEntries(to.map((locale) => [locale, { ...(raw as HashStore) }])),
-      owners: {},
-    };
+  const isV2 = Object.values(raw).some((value) => typeof value === 'string');
+  const v2 = isV2 ? (raw as HashStore) : readV2(raw.$v2);
+  const locales = isV2
+    ? {}
+    : (Object.fromEntries(Object.entries(raw).filter(([key]) => !key.startsWith('$'))) as LocaleHashes);
+  if (v2) {
+    for (const locale of to) if (!Object.hasOwn(locales, locale)) locales[locale] = { ...v2 };
   }
-  const locales = Object.fromEntries(Object.entries(raw).filter(([key]) => !key.startsWith('$'))) as LocaleHashes;
-  return { locales, owners: readOwners(raw.$owners) };
+  return { locales, owners: isV2 ? {} : readOwners(raw.$owners), v2 };
+}
+
+function readV2(value: unknown): HashStore | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return Object.fromEntries(Object.entries(value).filter(([, hash]) => typeof hash === 'string')) as HashStore;
 }
 
 function readOwners(value: unknown): Record<string, string[]> {
@@ -45,7 +56,11 @@ export function loadHashStore(hashFile: string, to: string[]): LocaleHashes {
 
 export function saveSidecar(hashFile: string, sidecar: Sidecar): void {
   fs.mkdirSync(path.dirname(hashFile), { recursive: true });
-  writeJson(hashFile, { ...sidecar.locales, $owners: sidecar.owners });
+  writeJson(hashFile, {
+    ...sidecar.locales,
+    $owners: sidecar.owners,
+    ...(sidecar.v2 && { $v2: sidecar.v2 }),
+  });
 }
 
 /**

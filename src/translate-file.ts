@@ -185,5 +185,16 @@ function mergeRun(
   }
   const held = new Set(Object.values(locales).flatMap((store) => Object.keys(store)));
   const owned = new Set([...sourceKeys, ...[...ownedBefore].filter((key) => held.has(key))]);
-  return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] } };
+  // The v2 map is pruned like a locale's store: a key goes only when this input wrote it
+  // and dropped it. Nothing drops the map as a whole.
+  const sourceSet = new Set(sourceKeys);
+  const v2 =
+    sidecar.v2 &&
+    mergeOwnedHashes(
+      sidecar.v2,
+      ownedBefore,
+      ownedByOthers,
+      Object.fromEntries(Object.entries(sidecar.v2).filter(([key]) => sourceSet.has(key))),
+    );
+  return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] }, v2 };
 }

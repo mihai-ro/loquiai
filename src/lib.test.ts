@@ -1422,7 +1422,7 @@ describe('translate — the hash sidecar is kept per locale', () => {
     await p.run(['es', 'pt']);
 
     assert.equal(p.calls() - before, 0);
-    const { $owners: _owners, ...locales } = p.sidecar();
+    const { $owners: _owners, $v2: _v2, ...locales } = p.sidecar();
     assert.deepEqual(locales, { es: flat, pt: flat });
   });
 
@@ -1437,6 +1437,39 @@ describe('translate — the hash sidecar is kept per locale', () => {
       Object.keys(p.sidecar()).filter((key) => !key.startsWith('$')),
       ['es'],
     );
+  });
+
+  test('a v2 sidecar converted by a partial run still covers the other locales', async () => {
+    const p = project();
+    await p.run(['es', 'pt']);
+    fs.writeFileSync(p.hashFile, JSON.stringify({ greeting: hashValue('hello') }));
+    p.edit({ greeting: 'hello there' });
+
+    await p.run(['es']);
+    assert.deepEqual(Object.keys(p.sidecar()).sort(), ['$owners', '$v2', 'es']);
+
+    const { results } = diff({ input: p.source, to: ['pt'], output: p.out, hashFile: p.hashFile });
+    assert.deepEqual(results[0].changed, ['greeting']);
+
+    const before = p.calls();
+    await p.run(['pt']);
+
+    assert.equal(p.calls() - before, 1);
+    assert.equal(p.read('pt').greeting, 'HELLO THERE');
+  });
+
+  test('the $v2 map drops a key this input wrote and the source no longer has', async () => {
+    const p = project();
+    await p.run(['es']);
+    const stale = { greeting: hashValue('hello'), gone: 'deadbeef' };
+    fs.writeFileSync(
+      p.hashFile,
+      JSON.stringify({ es: stale, $v2: stale, $owners: { 'en.json': ['greeting', 'gone'] } }),
+    );
+
+    await p.run(['es']);
+
+    assert.deepEqual(Object.keys(p.sidecar().$v2), ['greeting']);
   });
 
   test('diff() reports a key as changed for the locale that was not re-delivered', async () => {
@@ -1513,11 +1546,11 @@ describe('translate — inputs sharing one hash sidecar', () => {
     };
     const write = (name: string, doc: Record<string, string>) =>
       fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(doc), 'utf-8');
-    const run = (name: string) =>
+    const run = (name: string, to: string[] = ['es']) =>
       translate({
         input: path.join(dir, `${name}.json`),
         from: 'en',
-        to: ['es'],
+        to,
         output: path.join(dir, `${name}-{locale}.json`),
         hashFile,
         engine,
@@ -1531,7 +1564,8 @@ describe('translate — inputs sharing one hash sidecar', () => {
         calls = 0;
       },
       sidecar: () => JSON.parse(fs.readFileSync(hashFile, 'utf-8')),
-      target: (name: string) => JSON.parse(fs.readFileSync(path.join(dir, `${name}-es.json`), 'utf-8')),
+      target: (name: string, locale = 'es') =>
+        JSON.parse(fs.readFileSync(path.join(dir, `${name}-${locale}.json`), 'utf-8')),
     };
   }
 
@@ -1563,6 +1597,23 @@ describe('translate — inputs sharing one hash sidecar', () => {
     const { es, $owners } = p.sidecar();
     assert.deepEqual(Object.keys(es).sort(), ['k1', 'k2']);
     assert.deepEqual($owners, { 'a.json': ['k1'], 'b.json': ['k2'] });
+  });
+
+  test('a v2 sidecar shared by two inputs keeps the other input hashes for a later locale', async () => {
+    const p = shared();
+    p.write('a', { k1: 'one' });
+    p.write('b', { k2: 'two' });
+    await p.run('a', ['es', 'pt']);
+    await p.run('b', ['es', 'pt']);
+    fs.writeFileSync(p.hashFile, JSON.stringify({ k1: hashValue('one'), k2: hashValue('two') }), 'utf-8');
+
+    p.write('b', { k2: 'two edited' });
+    await p.run('a', ['es']);
+    p.reset();
+    await p.run('b', ['pt']);
+
+    assert.equal(p.calls(), 1);
+    assert.deepEqual(p.target('b', 'pt'), { k2: 'pt:two edited' });
   });
 
   test('a sidecar with no owner list keeps the keys the source lacks', async () => {

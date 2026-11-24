@@ -16,7 +16,7 @@ import type { LoquiConfig } from './types.js';
 import { type ValidationResult, validateLocales } from './validate.js';
 
 export interface InspectOptions {
-  /** Source to compare against. Either a file path or a raw JSON string. */
+  /** Path of the source file to compare against. */
   input: string;
   /** Target locale(s). Overrides config.to. */
   to?: string | string[];
@@ -61,7 +61,7 @@ function load(options: InspectOptions) {
 export function diff(options: InspectOptions): DiffReport {
   const { inputPath, sourceFlat, existing } = load(options);
   const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
-  const hashStore = hashFilePath ? loadHashStore(hashFilePath) : {};
+  const hashStore = loadHashStore(hashFilePath);
   return {
     results: diffLocales(sourceFlat, existing, hashStore),
     hasBaseline: Object.values(hashStore).some((store) => Object.keys(store).length > 0),

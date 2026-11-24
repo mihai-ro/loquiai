@@ -8,11 +8,9 @@ Usage:
   loqui init                    Interactive setup wizard — creates .loqui.json
   loqui migrate [options]       Convert v2 hash sidecars and translation memory to v3 (run once)
 
-  [input] — one of:
-    --input <file>         read from a JSON file
-    --input '<json>'       pass a JSON string inline
-    first positional arg   loqui '{"key":"val"}' --from en --to es
-    stdin                  cat en.json | loqui --from en --to es
+  [input] — the path of a JSON file, one of:
+    --input <file>         loqui --input en.json --from en --to es
+    first positional arg   loqui en.json --from en --to es
 
 Options:
   --config <path>        Config file or directory (default: .loqui.json in cwd)

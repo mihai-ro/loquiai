@@ -30,6 +30,8 @@ export interface TranslateJobOptions {
   glossaryModel?: GlossaryModel;
   force?: boolean;
   dryRun?: boolean;
+  /** per locale, keys the caller has stopped retrying; see `PlanOptions.capped`. */
+  capped?: Record<string, ReadonlySet<string>>;
   engine?: EngineAdapter;
   /** where the run's messages go. Required: a site that forgets it would log nowhere. */
   logger: LogFn;
@@ -39,6 +41,8 @@ export interface TranslateJobResult {
   translations: Record<string, FlatTranslations>;
   updatedHashStore: LocaleHashes;
   updatedTranslationMemory: TranslationMemory;
+  /** per locale, the keys the run turned down. */
+  rejected: Record<string, string[]>;
   stats: RunStats;
   /**
    * The run's log. A caller that has something to say after the run, such as the file
@@ -99,6 +103,9 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   const plan = planRun(opts, translationMemory, log, stats);
   const { workingTargets, delivered, outstanding, currentSourceHashes, memoryKeys } = plan;
   const { chunks } = plan;
+  const rejected: Record<string, Set<string>> = Object.fromEntries(to.map((locale) => [locale, new Set<string>()]));
+  const rejectedLists = (): Record<string, string[]> =>
+    Object.fromEntries(Object.entries(rejected).map(([locale, keys]) => [locale, [...keys]]));
 
   if (chunks.length === 0) {
     stats.elapsedMs = Date.now() - startTime;
@@ -106,6 +113,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
       translations: workingTargets,
       updatedHashStore: buildUpdatedHashes(hashStore, to, currentSourceHashes, outstanding),
       updatedTranslationMemory: translationMemory,
+      rejected: rejectedLists(),
       stats,
       log,
     };
@@ -136,6 +144,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
           engine,
           locales,
           delivered,
+          rejected,
           onSplit,
           from,
           sourceFlat,
@@ -190,6 +199,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     translations: workingTargets,
     updatedHashStore,
     updatedTranslationMemory: translationMemory,
+    rejected: rejectedLists(),
     stats,
     log,
     failure,

@@ -114,9 +114,12 @@ async function streamsDuring(fn: () => Promise<unknown>): Promise<string[]> {
 }
 
 let configDir: string;
+let sourceFile: string;
 
 before(async () => {
   configDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loqui-logging-'));
+  sourceFile = path.join(configDir, 'source.json');
+  await fs.promises.writeFile(sourceFile, '{"a":"Hello","b":"World"}');
 });
 
 after(async () => {
@@ -124,7 +127,7 @@ after(async () => {
 });
 
 const runOptions = (extra: { logger?: LogFn; engine: EngineAdapter }) => ({
-  input: '{"a":"Hello","b":"World"}',
+  input: sourceFile,
   from: 'en',
   to: ['es', 'pt'],
   namespace: 'quiet',

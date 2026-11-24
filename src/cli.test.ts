@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { after, before, describe, test } from 'node:test';
-import { main, readStdin, run } from './cli.js';
+import { main, run } from './cli.js';
 import type { InputStream } from './cli-init.js';
 import { LoquiError } from './errors.js';
 
@@ -52,6 +52,14 @@ async function withArgv(args: string[], fn: () => Promise<void>): Promise<void> 
 }
 
 let tmpDir: string;
+let inputCounter = 0;
+
+/** The input file for a document: the CLI takes paths only. */
+function inputFile(json: string): string {
+  const file = path.join(tmpDir, `input-${inputCounter++}.json`);
+  fs.writeFileSync(file, json);
+  return file;
+}
 
 before(async () => {
   // an empty directory as --config keeps these runs independent of any .loqui.json
@@ -77,7 +85,7 @@ describe('main — stream separation', () => {
   test('a result run puts only parseable JSON on stdout', async () => {
     const streams = await captureStreams(async (stdout) => {
       await withArgv(
-        ['{"greeting":{"hi":"Hello"}}', '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir],
+        [inputFile('{"greeting":{"hi":"Hello"}}'), '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir],
         () => main({ stdout }),
       );
     });
@@ -90,7 +98,7 @@ describe('main — stream separation', () => {
 
   test('multi-locale results are a single JSON document on stdout', async () => {
     const streams = await captureStreams(async (stdout) => {
-      await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr,de', '--dry-run', '--config', tmpDir], () =>
+      await withArgv([inputFile('{"a":"x"}'), '--from', 'en', '--to', 'fr,de', '--dry-run', '--config', tmpDir], () =>
         main({ stdout }),
       );
     });
@@ -109,7 +117,7 @@ describe('main — stream separation', () => {
     const streams = await captureStreams(async (stdout) => {
       await withArgv(
         [
-          '{"a":"x"}',
+          inputFile('{"a":"x"}'),
           '--from',
           'en',
           '--to',
@@ -131,7 +139,7 @@ describe('main — stream separation', () => {
 
   test('--validate without --output rejects with INVALID_USAGE', async () => {
     await assert.rejects(
-      withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--validate', '--config', tmpDir], () => main()),
+      withArgv([inputFile('{"a":"x"}'), '--from', 'en', '--to', 'fr', '--validate', '--config', tmpDir], () => main()),
       (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_USAGE' && /--output/.test(err.message),
     );
   });
@@ -145,7 +153,7 @@ describe('main — stream separation', () => {
       const streams = await captureStreams(async (stdout) => {
         await withArgv(
           [
-            '{"a":"x","b":"z"}',
+            inputFile('{"a":"x","b":"z"}'),
             '--from',
             'en',
             '--to',
@@ -177,7 +185,17 @@ describe('main — stream separation', () => {
     fs.writeFileSync(path.join(outDir, 'fr.json'), JSON.stringify({ a: 'x' }), 'utf-8');
     const streams = await captureStreams(async (stdout) => {
       await withArgv(
-        ['{"a":"x"}', '--from', 'en', '--to', 'fr', '--output', path.join(outDir, '{locale}.json'), '--config', tmpDir],
+        [
+          inputFile('{"a":"x"}'),
+          '--from',
+          'en',
+          '--to',
+          'fr',
+          '--output',
+          path.join(outDir, '{locale}.json'),
+          '--config',
+          tmpDir,
+        ],
         () => main({ stdout }),
       );
     });
@@ -191,7 +209,7 @@ describe('main — stream separation', () => {
     const streams = await captureStreams(async (stdout) => {
       await withArgv(
         [
-          '{"a":"x"}',
+          inputFile('{"a":"x"}'),
           '--from',
           'en',
           '--to',
@@ -231,7 +249,7 @@ describe('run — exit code mapping', () => {
 
     try {
       // no 'to' locale anywhere → INVALID_CONFIG → exit 9
-      process.argv = argv('{"a":"x"}', '--from', 'en', '--config', tmpDir);
+      process.argv = argv(inputFile('{"a":"x"}'), '--from', 'en', '--config', tmpDir);
       run();
       // let the rejection handler settle
       await new Promise((resolve) => setImmediate(resolve));
@@ -268,31 +286,8 @@ function sink(): NodeJS.WritableStream & { text: () => string } {
   return Object.assign(stream, { text: () => chunks.join('') });
 }
 
-describe('readStdin', () => {
-  test('resolves with the trimmed stream contents', async () => {
-    assert.equal(await readStdin(fakeStdin(['  {"a":', '"b"}  \n'])), '{"a":"b"}');
-  });
-
-  test('rejects when the stream errors', async () => {
-    const stream = new PassThrough() as PassThrough & { isTTY?: boolean };
-    const pending = readStdin(stream as InputStream);
-    stream.destroy(new Error('pipe broke'));
-    await assert.rejects(pending, /pipe broke/);
-  });
-});
-
-describe('main — stdin input', () => {
-  test('reads the source document from stdin when no input flag is given', async () => {
-    const streams = await captureStreams(async (stdout) => {
-      await withArgv(['--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir], () =>
-        main({ stdin: fakeStdin(['{"a":"x"}']), stdout }),
-      );
-    });
-
-    assert.doesNotThrow(() => JSON.parse(streams.out));
-  });
-
-  test('rejects with INVALID_USAGE when stdin is a terminal and no input was supplied', async () => {
+describe('main — no input', () => {
+  test('rejects with INVALID_USAGE when stdin is a terminal', async () => {
     await assert.rejects(
       withArgv(['--from', 'en', '--to', 'fr', '--config', tmpDir], () =>
         main({ stdin: fakeStdin([], { isTTY: true }) }),
@@ -302,11 +297,11 @@ describe('main — stdin input', () => {
     );
   });
 
-  test('rejects with INVALID_USAGE when stdin is empty', async () => {
+  test('rejects with INVALID_USAGE when a document is piped on stdin: it is not read as input', async () => {
     await assert.rejects(
-      withArgv(['--from', 'en', '--to', 'fr', '--config', tmpDir], () => main({ stdin: fakeStdin([' \n']) })),
+      withArgv(['--from', 'en', '--to', 'fr', '--config', tmpDir], () => main({ stdin: fakeStdin(['{"a":"x"}']) })),
       (err: unknown) =>
-        err instanceof LoquiError && err.code === 'INVALID_USAGE' && /empty input from stdin/.test(err.message),
+        err instanceof LoquiError && err.code === 'INVALID_USAGE' && /No input provided/.test(err.message),
     );
   });
 });
@@ -369,12 +364,12 @@ describe('main — usage errors', () => {
 describe('main — what the CLI still says on stderr', () => {
   test('a dry run shows the run progress the library now hands to the logger', async () => {
     const streams = await captureStreams(async (stdout) => {
-      await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir], () =>
+      await withArgv([inputFile('{"a":"x"}'), '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir], () =>
         main({ stdout }),
       );
     });
 
-    assert.match(streams.err, /\[translation\] \[dry-run\] Translating 1 key\(s\) → fr/);
+    assert.match(streams.err, /\[input-\d+\] \[dry-run\] Translating 1 key\(s\) → fr/);
     assert.match(streams.err, /1 chunk\(s\) over 1 locale group\(s\) = 0 \(dry-run\) request\(s\)/);
   });
 
@@ -388,7 +383,7 @@ describe('main — what the CLI still says on stderr', () => {
       const streams = await captureStreams(async (stdout) => {
         await withArgv(
           [
-            '{"a":"x","b":"z"}',
+            inputFile('{"a":"x","b":"z"}'),
             '--from',
             'en',
             '--to',
@@ -419,7 +414,7 @@ describe('main — what the CLI still says on stderr', () => {
     const streams = await captureStreams(async (stdout) => {
       await withArgv(
         [
-          '{"a":"x","b":"z"}',
+          inputFile('{"a":"x","b":"z"}'),
           '--from',
           'en',
           '--to',
@@ -450,7 +445,7 @@ describe('the CLI printers', () => {
         else delete process.env.NO_COLOR;
         process.stderr.isTTY = opts.tty;
         try {
-          await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir], () =>
+          await withArgv([inputFile('{"a":"x"}'), '--from', 'en', '--to', 'fr', '--dry-run', '--config', tmpDir], () =>
             main({ stdout }),
           );
         } finally {
@@ -477,11 +472,11 @@ describe('main — a run that fails after some work', () => {
     let streams: Streams | undefined;
     try {
       streams = await captureStreams(async (stdout) => {
-        await withArgv(['{"a":"x"}', '--from', 'en', '--to', 'fr', '--config', tmpDir], () => main({ stdout })).catch(
-          (err) => {
-            failure = err;
-          },
-        );
+        await withArgv([inputFile('{"a":"x"}'), '--from', 'en', '--to', 'fr', '--config', tmpDir], () =>
+          main({ stdout }),
+        ).catch((err) => {
+          failure = err;
+        });
       });
     } finally {
       globalThis.fetch = realFetch;

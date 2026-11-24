@@ -60,14 +60,11 @@ interface MigratedInput {
 }
 
 /** The inputs that share one sidecar file, keyed by that file's path. */
-function groupBy(
-  inputs: MigratedInput[],
-  pathOf: (input: MigratedInput) => string | null,
-): Map<string, MigratedInput[]> {
+function groupBy(inputs: MigratedInput[], pathOf: (input: MigratedInput) => string): Map<string, MigratedInput[]> {
   const groups = new Map<string, MigratedInput[]>();
   for (const input of inputs) {
     const file = pathOf(input);
-    if (file) groups.set(file, [...(groups.get(file) ?? []), input]);
+    groups.set(file, [...(groups.get(file) ?? []), input]);
   }
   return groups;
 }
@@ -129,9 +126,6 @@ export function runMigrate(tokens: string[], stdout: NodeJS.WritableStream): voi
 
   const inputs = args.inputs.map((input) => {
     const { inputPath, sourceFlat } = loadSource(input, config);
-    if (!inputPath) {
-      throw new LoquiError('INVALID_USAGE', 'loqui migrate reads input files: an inline JSON string has no sidecar.');
-    }
     return { inputPath, sourceFlat };
   });
 

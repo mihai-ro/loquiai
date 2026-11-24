@@ -41,6 +41,13 @@ function nextTmp(): string {
   return path.join(tmpDir, `test-${tmpCounter++}`);
 }
 
+/** The input file for a document: `translate()` and the CLI take paths only. */
+function inputFile(json: string): string {
+  const file = path.join(tmpDir, `input-${tmpCounter++}.json`);
+  fs.writeFileSync(file, json);
+  return file;
+}
+
 before(async () => {
   tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loqui-test-'));
 });
@@ -369,7 +376,7 @@ describe('translate — the removed diff and validate modes', () => {
 
   test('an undefined flag is not a flag', async () => {
     const result = await translate({
-      input: '{"a":"Hello"}',
+      input: inputFile('{"a":"Hello"}'),
       from: 'en',
       to: ['es'],
       engine: makeEngine(),
@@ -395,7 +402,7 @@ describe('translate — an output record must cover every target locale', () => 
 
     await assert.rejects(
       translate({
-        input: '{"greeting":"hello"}',
+        input: inputFile('{"greeting":"hello"}'),
         from: 'en',
         to: ['es', 'de'],
         output: { es: path.join(dir, 'es.json') },
@@ -415,7 +422,7 @@ describe('translate — an output record must cover every target locale', () => 
   test('replaces every {locale} in a template', async () => {
     const dir = nextTmp();
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['es'],
       output: path.join(dir, '{locale}', '{locale}.json'),
@@ -462,7 +469,7 @@ describe('translate — locale and term names that match Object.prototype member
 
     try {
       const run = await translate({
-        input: JSON.stringify({ a: 'Hello' }),
+        input: inputFile(JSON.stringify({ a: 'Hello' })),
         from: 'en',
         to: ['es'],
         config: { glossary: { path: glossaryDir } },

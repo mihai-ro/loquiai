@@ -130,6 +130,7 @@ export type RunWarningCode =
   | 'UNTRANSLATED'
   | 'LENGTH_RATIO'
   | 'NOT_SENT'
+  | 'RETRY_CAP'
   | 'CHUNK_FAILED'
   | 'CUT_OFF'
   | 'REMOVED_KEYS'
@@ -181,6 +182,12 @@ export interface TranslationRun {
 export interface ObjectRun extends TranslationRun {
   hashes: LocaleHashes;
   memory: TranslationMemory;
+  /**
+   * Per locale, the keys this run turned down: a broken placeholder, a lost glossary term, or
+   * a key it could not send. A key that is turned down on every run is one a caller may stop
+   * retrying: pass it back as `capped`.
+   */
+  rejected: Record<string, string[]>;
 }
 
 /** The result of `translate()`: the run, plus where it was written. */

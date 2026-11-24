@@ -41,6 +41,13 @@ function nextTmp(): string {
   return path.join(tmpDir, `test-${tmpCounter++}`);
 }
 
+/** The input file for a document: `translate()` and the CLI take paths only. */
+function inputFile(json: string): string {
+  const file = path.join(tmpDir, `input-${tmpCounter++}.json`);
+  fs.writeFileSync(file, json);
+  return file;
+}
+
 before(async () => {
   tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loqui-test-'));
 });
@@ -100,7 +107,7 @@ describe('translate — a partial run keeps what it paid for', () => {
 
     async function rejection(engine: EngineAdapter): Promise<LoquiError> {
       try {
-        await translate({ input, from: 'en', to: ['fr'], config: { splitToken: 500 }, engine });
+        await translate({ input: inputFile(input), from: 'en', to: ['fr'], config: { splitToken: 500 }, engine });
       } catch (err) {
         if (err instanceof LoquiError) return err;
         throw err;
@@ -159,7 +166,7 @@ describe('translate — a partial run keeps what it paid for', () => {
       fs.writeFileSync(tmFile, JSON.stringify({ [memoryKey('Hello')]: { fr: 'Bonjour' } }), 'utf-8');
       try {
         await translate({
-          input: JSON.stringify({ served: 'Hello', sent: 'World' }),
+          input: inputFile(JSON.stringify({ served: 'Hello', sent: 'World' })),
           from: 'en',
           to: ['fr'],
           translationMemoryFile: tmFile,
@@ -195,7 +202,7 @@ describe('translate — a partial run keeps what it paid for', () => {
 
     await assert.rejects(
       translate({
-        input: JSON.stringify({ a: 'Hello' }),
+        input: inputFile(JSON.stringify({ a: 'Hello' })),
         from: 'en',
         to: ['fr'],
         output: path.join(dir, '{locale}.json'),
@@ -219,7 +226,7 @@ describe('translate — a partial run keeps what it paid for', () => {
 
     await assert.rejects(
       translate({
-        input: JSON.stringify({ keep: KEEP, boom: BOOM }),
+        input: inputFile(JSON.stringify({ keep: KEEP, boom: BOOM })),
         from: 'en',
         to: ['fr'],
         output: path.join(dir, '{locale}.json'),
@@ -365,14 +372,14 @@ describe('translate — the typed result', () => {
     const dir = nextTmp();
 
     const dry = await translate({
-      input: '{"a":"Hello"}',
+      input: inputFile('{"a":"Hello"}'),
       from: 'en',
       to: ['es'],
       output: path.join(dir, '{locale}.json'),
       dryRun: true,
       engine: makeEngine(),
     });
-    const bare = await translate({ input: '{"a":"Hello"}', from: 'en', to: ['es'], engine: makeEngine() });
+    const bare = await translate({ input: inputFile('{"a":"Hello"}'), from: 'en', to: ['es'], engine: makeEngine() });
 
     assert.deepEqual(dry.written, {});
     assert.deepEqual(bare.written, {});
@@ -385,7 +392,7 @@ describe('translate — the typed result', () => {
     fs.writeFileSync(path.join(dir, 'es.json'), JSON.stringify({ a: 'Hola', stale: 'x' }), 'utf-8');
 
     const result = await translate({
-      input: '{"a":"Hello"}',
+      input: inputFile('{"a":"Hello"}'),
       from: 'en',
       to: ['es'],
       output: path.join(dir, '{locale}.json'),
@@ -411,7 +418,7 @@ describe('translate — the typed result', () => {
     };
 
     const result = await translate({
-      input: JSON.stringify({ title: 'Open the Dashboard', glossary: { Dashboard: { es: 'Tablero' } } }),
+      input: inputFile(JSON.stringify({ title: 'Open the Dashboard', glossary: { Dashboard: { es: 'Tablero' } } })),
       from: 'en',
       to: ['es'],
       config: { glossary: {} },
@@ -453,7 +460,7 @@ describe('translate — a failed run reports what was written', () => {
 
     const err = await rejection(
       translate({
-        input: JSON.stringify({ keep: KEEP, boom: BOOM }),
+        input: inputFile(JSON.stringify({ keep: KEEP, boom: BOOM })),
         from: 'en',
         to: ['es', 'pt'],
         output: path.join(dir, '{locale}.json'),
@@ -480,7 +487,7 @@ describe('translate — a failed run reports what was written', () => {
 
     const err = await rejection(
       translate({
-        input: '{"a":"Hello"}',
+        input: inputFile('{"a":"Hello"}'),
         from: 'en',
         to: ['es'],
         output: path.join(dir, '{locale}.json'),
@@ -500,7 +507,7 @@ describe('translate — a failed run reports what was written', () => {
   test('without an output path the message points at error.result', async () => {
     const err = await rejection(
       translate({
-        input: JSON.stringify({ keep: KEEP, boom: BOOM }),
+        input: inputFile(JSON.stringify({ keep: KEEP, boom: BOOM })),
         from: 'en',
         to: ['es'],
         config: { splitToken: 500 },
@@ -513,8 +520,16 @@ describe('translate — a failed run reports what was written', () => {
     assert.match(err.message, /error\.result/);
   });
 
+  test('a JSON string is not an input: it is looked up as a path and not found', async () => {
+    const err = await rejection(translate({ input: '{"a":"b"}', from: 'en', to: ['es'], engine: makeEngine() }));
+
+    assert.equal(err.code, 'INPUT_NOT_FOUND');
+  });
+
   test('an error that stops the run before anything is sent has no result', async () => {
-    const err = await rejection(translate({ input: '{not json', from: 'en', to: ['es'], engine: makeEngine() }));
+    const err = await rejection(
+      translate({ input: inputFile('{not json'), from: 'en', to: ['es'], engine: makeEngine() }),
+    );
 
     assert.equal(err.code, 'PARSE_ERROR');
     assert.equal(err.result, undefined);

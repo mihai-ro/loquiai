@@ -190,9 +190,9 @@ describe('loqui migrate — usage', () => {
     assert.throws(() => migrate(p.dir, '--to', 'es'), usageError('INVALID_USAGE'));
   });
 
-  test('rejects an inline JSON input, which has no sidecar', () => {
+  test('reads an inline JSON string as a path, so it is not found', () => {
     const p = project();
-    assert.throws(() => migrate(p.dir, '--to', 'es', '--input', '{"a":"b"}'), usageError('INVALID_USAGE'));
+    assert.throws(() => migrate(p.dir, '--to', 'es', '--input', '{"a":"b"}'), usageError('INPUT_NOT_FOUND'));
   });
 
   test('rejects an unknown flag and a flag with no value', () => {

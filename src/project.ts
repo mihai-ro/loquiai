@@ -36,19 +36,17 @@ export function resolveTargets(to: string | string[] | undefined, config: LoquiC
 }
 
 export interface LoadedSource {
-  /** null when the input was a raw JSON string. */
-  inputPath: string | null;
+  inputPath: string;
   /** the document, without an inline `glossary` key when that feature is on. */
   source: JsonObject;
   sourceFlat: FlatTranslations;
   inlineGlossaryTerms?: Record<string, Record<string, string>>;
 }
 
-/** Reads the input, a file path or a raw JSON string. */
+/** Reads the input file. */
 export function loadSource(input: string, config: LoquiConfig): LoadedSource {
-  const isRawJson = input.trimStart().startsWith('{');
-  const inputPath = isRawJson ? null : path.resolve(input);
-  const inputJson = isRawJson ? input : readInputFile(path.resolve(input));
+  const inputPath = path.resolve(input);
+  const inputJson = readInputFile(inputPath);
 
   let inlineGlossaryTerms: Record<string, Record<string, string>> | undefined;
   // Only strip the inline `glossary` key when the feature is active and no external path is set.
@@ -60,7 +58,7 @@ export function loadSource(input: string, config: LoquiConfig): LoadedSource {
   } catch {
     throw new LoquiError('PARSE_ERROR', 'Failed to parse input as JSON. Make sure it is a valid JSON object.');
   }
-  const source = assertJsonObject(parsed, inputPath ?? 'The input') as JsonObject;
+  const source = assertJsonObject(parsed, inputPath) as JsonObject;
   if (useInlineGlossary && 'glossary' in source) {
     const raw = source.glossary;
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -75,7 +73,9 @@ function readInputFile(inputPath: string): string {
   try {
     return fs.readFileSync(inputPath, 'utf-8');
   } catch (err) {
-    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+    // A string that is no path at all (a JSON document, say) fails as too long or as a
+    // path through a file; to the caller it is the same: there is no such input.
+    if (err instanceof Error && 'code' in err && ['ENOENT', 'ENAMETOOLONG', 'ENOTDIR'].includes(String(err.code))) {
       throw new LoquiError('INPUT_NOT_FOUND', `The input file does not exist: ${inputPath}`, { cause: err });
     }
     throw err;
@@ -121,14 +121,9 @@ export function loadExisting(outputPaths: Record<string, string> | null, to: str
   return existing;
 }
 
-/** Where a sidecar lives: the given path, else next to the input file. null for a raw JSON input. */
-export function sidecarPath(
-  inputPath: string | null,
-  explicit: string | undefined,
-  kind: 'hash' | 'tm',
-): string | null {
+/** Where a sidecar lives: the given path, else next to the input file. */
+export function sidecarPath(inputPath: string, explicit: string | undefined, kind: 'hash' | 'tm'): string {
   if (explicit) return explicit;
-  if (!inputPath) return null;
   const stem = path.basename(inputPath, path.extname(inputPath));
   return path.join(path.dirname(inputPath), `.${stem}.loqui-${kind}.json`);
 }

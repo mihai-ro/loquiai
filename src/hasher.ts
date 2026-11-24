@@ -2,13 +2,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { LoquiError } from './errors.js';
 import type { HashStore, LocaleHashes } from './types.js';
-import { readJson, writeJson } from './utils/json.js';
+import { readJson, setOwn, writeJson } from './utils/json.js';
 
-/** What the sidecar file holds: the hashes per locale, and which input wrote which keys. */
+/** How often a key was turned down in a row, and the source hash it was turned down for. */
+export interface Attempt {
+  hash: string;
+  n: number;
+}
+
+/** Owner id → locale → flat key → its attempts. */
+export type Attempts = Record<string, Record<string, Record<string, Attempt>>>;
+
+/** What the sidecar file holds: the hashes per locale, which input wrote which keys, and what keeps being turned down. */
 export interface Sidecar {
   locales: LocaleHashes;
   /** Owner id → the flat keys that input's source had when it last saved. */
   owners: Record<string, string[]>;
+  attempts: Attempts;
 }
 
 /**
@@ -25,7 +35,7 @@ export function readSidecar(hashFile: string): Sidecar {
     );
   }
   const locales = Object.fromEntries(Object.entries(raw).filter(([key]) => !key.startsWith('$'))) as LocaleHashes;
-  return { locales, owners: readOwners(raw.$owners) };
+  return { locales, owners: readOwners(raw.$owners), attempts: readAttempts(raw.$attempts) };
 }
 
 /** A v2 sidecar is one flat map of hashes, so its values are strings where v3 has objects. */
@@ -48,6 +58,27 @@ function readOwners(value: unknown): Record<string, string[]> {
   );
 }
 
+function readAttempts(value: unknown): Attempts {
+  const attempts: Attempts = {};
+  for (const [id, byLocale] of ownEntries(value)) {
+    const locales: Record<string, Record<string, Attempt>> = {};
+    for (const [locale, byKey] of ownEntries(byLocale)) {
+      const keys: Record<string, Attempt> = {};
+      for (const [key, attempt] of ownEntries(byKey)) {
+        const { hash, n } = (attempt ?? {}) as Partial<Attempt>;
+        if (typeof hash === 'string' && typeof n === 'number') setOwn(keys, key, { hash, n });
+      }
+      if (Object.keys(keys).length > 0) setOwn(locales, locale, keys);
+    }
+    if (Object.keys(locales).length > 0) setOwn(attempts, id, locales);
+  }
+  return attempts;
+}
+
+function ownEntries(value: unknown): [string, unknown][] {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.entries(value) : [];
+}
+
 /** The hashes per locale alone, for a reader that has no use for who wrote them. */
 export function loadHashStore(hashFile: string): LocaleHashes {
   return readSidecar(hashFile).locales;
@@ -55,7 +86,8 @@ export function loadHashStore(hashFile: string): LocaleHashes {
 
 export function saveSidecar(hashFile: string, sidecar: Sidecar): void {
   fs.mkdirSync(path.dirname(hashFile), { recursive: true });
-  writeJson(hashFile, { ...sidecar.locales, $owners: sidecar.owners });
+  const attempts = Object.keys(sidecar.attempts).length > 0 ? { $attempts: sidecar.attempts } : {};
+  writeJson(hashFile, { ...sidecar.locales, $owners: sidecar.owners, ...attempts });
 }
 
 /**

@@ -42,6 +42,13 @@ function nextTmp(): string {
   return path.join(tmpDir, `test-${tmpCounter++}`);
 }
 
+/** The input file for a document: `translate()` and the CLI take paths only. */
+function inputFile(json: string): string {
+  const file = path.join(tmpDir, `input-${tmpCounter++}.json`);
+  fs.writeFileSync(file, json);
+  return file;
+}
+
 before(async () => {
   tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loqui-test-'));
 });
@@ -53,7 +60,7 @@ after(async () => {
 describe('translate — basic functionality', () => {
   test('returns one document per locale with the translated keys', async () => {
     const result = await translate({
-      input: '{"greeting":"hello","farewell":"goodbye"}',
+      input: inputFile('{"greeting":"hello","farewell":"goodbye"}'),
       from: 'en',
       to: ['fr', 'de'],
       engine: makeEngine(),
@@ -69,7 +76,7 @@ describe('translate — basic functionality', () => {
     await assert.rejects(
       () =>
         translate({
-          input: '{"greeting": invalid}',
+          input: inputFile('{"greeting": invalid}'),
           from: 'en',
           to: ['fr'],
         }),
@@ -81,7 +88,7 @@ describe('translate — basic functionality', () => {
     await assert.rejects(
       () =>
         translate({
-          input: '{"greeting":"hello"}',
+          input: inputFile('{"greeting":"hello"}'),
           to: ['fr'],
         }),
       (err: Error) => err.message.includes("'from'") || err.message.includes('source locale'),
@@ -90,7 +97,7 @@ describe('translate — basic functionality', () => {
 
   test('throws on a __proto__ target locale', async () => {
     await assert.rejects(
-      () => translate({ input: '{"greeting":"hello"}', from: 'en', to: '__proto__', engine: makeEngine() }),
+      () => translate({ input: inputFile('{"greeting":"hello"}'), from: 'en', to: '__proto__', engine: makeEngine() }),
       (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_CONFIG',
     );
   });
@@ -107,7 +114,7 @@ describe('translate — basic functionality', () => {
     await assert.rejects(
       () =>
         translate({
-          input: '{"greeting":"hello"}',
+          input: inputFile('{"greeting":"hello"}'),
           from: 'en',
         }),
       (err: Error) => err.message.includes("'to'") || err.message.includes('target locale'),
@@ -121,7 +128,7 @@ describe('translate — dry-run mode', () => {
     const outPath = path.join(dir, '{locale}.json');
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr'],
       output: outPath,
@@ -177,7 +184,7 @@ describe('translate — output path template', () => {
     const outPath = path.join(dir, '{locale}.json');
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr', 'de'],
       output: outPath,
@@ -198,7 +205,7 @@ describe('translate — output path template', () => {
     const dir = nextTmp();
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr'],
       output: dir,
@@ -217,7 +224,7 @@ describe('translate — output path template', () => {
     };
 
     await translate({
-      input: '{"greeting":"hello"}',
+      input: inputFile('{"greeting":"hello"}'),
       from: 'en',
       to: ['fr', 'de'],
       output: explicitOutput,
@@ -234,7 +241,7 @@ describe('translate — glossary', () => {
     // A namespace legitimately named "glossary" must not be stripped when the feature is off
     const source = JSON.stringify({ title: 'hello', glossary: { search: 'Search' } });
     const result = await translate({
-      input: source,
+      input: inputFile(source),
       from: 'en',
       to: ['es'],
       config: { ...CONFIG_DEFAULTS },
@@ -253,7 +260,7 @@ describe('translate — glossary', () => {
     });
 
     const result = await translate({
-      input: sourceWithGlossary,
+      input: inputFile(sourceWithGlossary),
       from: 'en',
       to: ['es'],
       config: { ...CONFIG_DEFAULTS, glossary: {} },
@@ -268,7 +275,7 @@ describe('translate — glossary', () => {
   test('noTranslate terms in glossary config survive translation verbatim', async () => {
     // Engine uppercases everything — but noTranslate terms must survive as-is
     const result = await translate({
-      input: JSON.stringify({ title: 'Welcome to Loqui today' }),
+      input: inputFile(JSON.stringify({ title: 'Welcome to Loqui today' })),
       from: 'en',
       to: ['es'],
       config: { ...CONFIG_DEFAULTS, glossary: { noTranslate: ['Loqui'] } },
@@ -284,7 +291,7 @@ describe('translate — glossary', () => {
     await assert.rejects(
       () =>
         translate({
-          input: JSON.stringify({ title: 'hello' }),
+          input: inputFile(JSON.stringify({ title: 'hello' })),
           from: 'en',
           to: ['es'],
           config: { ...CONFIG_DEFAULTS, glossary: { noTranslate: ['ok', 7] } as never },
@@ -298,7 +305,7 @@ describe('translate — glossary', () => {
     await assert.rejects(
       () =>
         translate({
-          input: JSON.stringify({ title: 'hello' }),
+          input: inputFile(JSON.stringify({ title: 'hello' })),
           from: 'en',
           to: ['es'],
           config: { ...CONFIG_DEFAULTS, glossary: { path: '  ' } },

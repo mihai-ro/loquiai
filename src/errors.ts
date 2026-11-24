@@ -19,6 +19,7 @@ export type FailedRunResult = TranslationRun & {
   /** set by `translateObject()`, for a caller that persists partial progress. */
   hashes?: LocaleHashes;
   memory?: TranslationMemory;
+  rejected?: Record<string, string[]>;
   /** set by `translate()`: the files written before it gave up. */
   written?: Record<string, string>;
 };

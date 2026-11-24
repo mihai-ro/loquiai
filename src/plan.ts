@@ -23,6 +23,8 @@ export interface PlanOptions {
   hashStore?: LocaleHashes;
   force?: boolean;
   dryRun?: boolean;
+  /** per locale, keys the caller has stopped retrying: not sent, and warned about. */
+  capped?: Record<string, ReadonlySet<string>>;
 }
 
 export interface PlannedChunk {
@@ -56,7 +58,17 @@ export function planRun(
   log: RunLog,
   stats: RunStats,
 ): RunPlan {
-  const { sourceFlat, to, namespace, config, existing = {}, hashStore = {}, force = false, dryRun = false } = opts;
+  const {
+    sourceFlat,
+    to,
+    namespace,
+    config,
+    existing = {},
+    hashStore = {},
+    force = false,
+    dryRun = false,
+    capped = {},
+  } = opts;
 
   // Hashes are source-derived — compute once for all keys, regardless of what needs translating.
   // This ensures the hash file is always up to date even on "nothing to do" runs.
@@ -71,6 +83,9 @@ export function planRun(
   // has, so a value there does not say it was translated this run. Delivery is tracked on its own: the engine produced
   // and processChunk accepted this key for this locale.
   const delivered: Record<string, Set<string>> = {};
+  // Capped keys the locale still needs: left unsent, and still owed, so no hash is recorded
+  // for them and a stale value that is there is not taken for a current one.
+  const withheld: Record<string, Set<string>> = {};
 
   for (const locale of to) {
     const existingFlat = existing[locale] ?? {};
@@ -78,6 +93,7 @@ export function planRun(
       Object.entries(existingFlat).filter(([key]) => Object.hasOwn(sourceFlat, key)),
     );
     delivered[locale] = new Set();
+    withheld[locale] = new Set();
 
     const localeHashes = localeStore(hashStore, locale) ?? {};
     const toTranslate: FlatTranslations = {};
@@ -92,7 +108,15 @@ export function planRun(
       // There is nothing in a blank value to translate, and an engine's empty answer
       // is discarded: queuing it would re-send the key on every run.
       if (value.trim() === '') workingTargets[locale][key] = value;
-      else toTranslate[key] = value;
+      else if (Object.hasOwn(capped, locale) && capped[locale].has(key)) {
+        withheld[locale].add(key);
+        log.warning({
+          code: 'RETRY_CAP',
+          message: `[${namespace}→${locale}] Key "${key}" was turned down on every earlier run and is not sent again until its source changes. Run again with force to try it anyway.`,
+          locale,
+          key,
+        });
+      } else toTranslate[key] = value;
     }
     if (Object.keys(toTranslate).length > 0) {
       keysToTranslatePerLocale[locale] = toTranslate;
@@ -105,7 +129,9 @@ export function planRun(
   // delivery, since for a changed key it is the stale one.
   const outstanding = (locale: string, key: string): boolean => {
     const needed = keysToTranslatePerLocale[locale];
-    return needed !== undefined && Object.hasOwn(needed, key) && !delivered[locale].has(key);
+    return (
+      (needed !== undefined && Object.hasOwn(needed, key) && !delivered[locale].has(key)) || withheld[locale].has(key)
+    );
   };
 
   // Computed once, for the keys that are looked up; the write-back reuses them.

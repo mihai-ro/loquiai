@@ -34,6 +34,11 @@ export interface TranslateObjectOptions {
   glossary?: GlossaryModel;
   namespace?: string;
   force?: boolean;
+  /**
+   * Keys to leave unsent, by locale: ones a caller has seen turned down on every run (see
+   * `ObjectRun.rejected`). Each is warned about with code `RETRY_CAP`. `force` sends them anyway.
+   */
+  capped?: Record<string, string[]>;
   /** Preview without calling the engine. */
   dryRun?: boolean;
   /** Custom engine; bypasses `config.engine`. */
@@ -60,22 +65,24 @@ export async function translateObject(source: JsonObject, options: TranslateObje
   const existing: Record<string, FlatDocument> = {};
   for (const [locale, doc] of Object.entries(options.existing ?? {})) existing[locale] = flatten(doc);
 
-  const { translations, updatedHashStore, updatedTranslationMemory, stats, log, failure } = await translateJson({
-    sourceFlat: sourceDoc.strings,
-    from: options.from,
-    to: options.to,
-    namespace,
-    config,
-    existing: Object.fromEntries(Object.entries(existing).map(([locale, doc]) => [locale, doc.strings])),
-    hashStore: options.hashes,
-    // The run records into the object it is given; the caller's own must not change under it.
-    translationMemory: options.memory && copyMemory(options.memory),
-    glossaryModel: options.glossary,
-    force: options.force,
-    dryRun: options.dryRun,
-    engine: options.engine,
-    logger: options.logger ?? (() => {}),
-  });
+  const { translations, updatedHashStore, updatedTranslationMemory, rejected, stats, log, failure } =
+    await translateJson({
+      sourceFlat: sourceDoc.strings,
+      from: options.from,
+      to: options.to,
+      namespace,
+      config,
+      existing: Object.fromEntries(Object.entries(existing).map(([locale, doc]) => [locale, doc.strings])),
+      hashStore: options.hashes,
+      // The run records into the object it is given; the caller's own must not change under it.
+      translationMemory: options.memory && copyMemory(options.memory),
+      glossaryModel: options.glossary,
+      force: options.force,
+      dryRun: options.dryRun,
+      capped: options.force ? undefined : cappedSets(options.capped),
+      engine: options.engine,
+      logger: options.logger ?? (() => {}),
+    });
 
   // A target holds exactly the source's keys, so a rewrite drops the rest. A run that
   // failed without translating anything rewrites nothing, so it prunes nothing either.
@@ -102,9 +109,21 @@ export async function translateObject(source: JsonObject, options: TranslateObje
     locales[locale] = deepSortKeys(unflatten(withStrings(sourceDoc, flat)));
   }
 
-  const run: ObjectRun = { locales, stats, removed, hashes: updatedHashStore, memory: updatedTranslationMemory };
+  const run: ObjectRun = {
+    locales,
+    stats,
+    removed,
+    hashes: updatedHashStore,
+    memory: updatedTranslationMemory,
+    rejected,
+  };
   if (failure) throw withResult(failure, run);
   return run;
+}
+
+function cappedSets(capped: Record<string, string[]> | undefined): Record<string, Set<string>> | undefined {
+  if (!capped) return undefined;
+  return Object.fromEntries(Object.entries(capped).map(([locale, keys]) => [locale, new Set(keys)]));
 }
 
 function copyMemory(memory: TranslationMemory): TranslationMemory {

@@ -56,8 +56,7 @@ export type {
 
 export interface TranslateOptions {
   /**
-   * Source to translate. Either a file path or a raw JSON string.
-   * Auto-detected: strings starting with '{' are treated as JSON, otherwise as a path.
+   * Path of the source file to translate. For a document already in memory, use `translateObject()`.
    */
   input: string;
   /** Source locale. Overrides config.from. */

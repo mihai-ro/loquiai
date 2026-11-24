@@ -15,19 +15,8 @@ import { translate } from './lib.js';
 import type { LoquiConfig, TranslateResult } from './types.js';
 import { stderrLogger } from './utils/logger.js';
 
-/** Reads the whole stream. The stream is injectable so tests never touch the real stdin. */
-export function readStdin(stream: InputStream = process.stdin): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    stream.setEncoding('utf-8');
-    stream.on('data', (chunk) => (data += chunk));
-    stream.on('end', () => resolve(data.trim()));
-    stream.on('error', reject);
-  });
-}
-
 export interface CliIO {
-  /** injectable stdin — tests drive the CLI with a stream instead of a terminal. */
+  /** injectable stdin for the `init` wizard — tests drive it with a stream instead of a terminal. */
   stdin?: InputStream;
   /** where results go. Diagnostics never come here; they go to stderr. */
   stdout?: NodeJS.WritableStream;
@@ -55,18 +44,12 @@ export async function main({ stdin = process.stdin, stdout = process.stdout }: C
 
   printHeader('[loqui] i18n translator');
 
-  let input = args.input;
+  const { input } = args;
   if (!input) {
-    if (stdin.isTTY) {
-      throw new LoquiError(
-        'INVALID_USAGE',
-        'No input provided. Use --input <file|json>, a positional arg, or pipe via stdin.',
-      );
-    }
-    input = await readStdin(stdin);
-    if (!input) {
-      throw new LoquiError('INVALID_USAGE', 'Received empty input from stdin.');
-    }
+    throw new LoquiError(
+      'INVALID_USAGE',
+      'No input provided. Pass a file path: --input <file>, or as the first argument.',
+    );
   }
 
   if (args.dryRun) stderrLogger('warn', 'Dry-run mode — no API calls or file writes.');

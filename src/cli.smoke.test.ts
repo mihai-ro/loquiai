@@ -16,8 +16,16 @@ const distEsm = path.join(repoRoot, 'dist', 'index.js');
 const ANSI_PREFIX = '\u001b[';
 
 let tmpDir: string;
+let inputCounter = 0;
 /** npm installs `bin` as a symlink; running through one is the whole point of these tests. */
 let binLink: string;
+
+/** The input file for a document: the CLI takes paths only. */
+function inputFile(json: string): string {
+  const file = path.join(tmpDir, `input-${inputCounter++}.json`);
+  fs.writeFileSync(file, json);
+  return file;
+}
 
 before(async () => {
   // Build here rather than relying on a prior `pnpm build`: the artifact under test
@@ -56,7 +64,7 @@ describe('built CLI — ESM entry through a symlink', () => {
   });
 
   test('exits with the documented code and a diagnostic when the config is incomplete', () => {
-    const result = spawnSync(process.execPath, [binLink, '{"a":"x"}', '--from', 'en'], {
+    const result = spawnSync(process.execPath, [binLink, inputFile('{"a":"x"}'), '--from', 'en'], {
       encoding: 'utf-8',
       cwd: tmpDir,
     });
@@ -72,7 +80,7 @@ describe('built CLI — usage errors exit 11', () => {
     spawnSync(process.execPath, [binLink, ...args], { encoding: 'utf-8', cwd: tmpDir, input });
 
   test('a second positional names the token it would drop', () => {
-    const result = run(['{"a":"x"}', '--from', 'en', '--to', 'fr', 'de']);
+    const result = run([inputFile('{"a":"x"}'), '--from', 'en', '--to', 'fr', 'de']);
 
     assert.equal(result.status, 11);
     assert.match(result.stderr, /de/);
@@ -80,17 +88,17 @@ describe('built CLI — usage errors exit 11', () => {
   });
 
   test('a value flag followed by a flag names the flag', () => {
-    const result = run(['{"a":"x"}', '--output', '--incremental']);
+    const result = run([inputFile('{"a":"x"}'), '--output', '--incremental']);
 
     assert.equal(result.status, 11);
     assert.match(result.stderr, /--output/);
   });
 
-  test('empty stdin exits 11', () => {
-    const result = run(['--from', 'en', '--to', 'fr'], '');
+  test('a document on stdin is not an input: exits 11', () => {
+    const result = run(['--from', 'en', '--to', 'fr'], '{"a":"x"}');
 
     assert.equal(result.status, 11);
-    assert.match(result.stderr, /empty input/);
+    assert.match(result.stderr, /No input provided/);
   });
 });
 
@@ -123,7 +131,7 @@ describe('built CLI — stdout carries results only', () => {
   test('piped stdout is valid JSON while diagnostics go to stderr', () => {
     const result = spawnSync(
       process.execPath,
-      [binLink, '{"greeting":{"hi":"Hello"}}', '--from', 'en', '--to', 'fr', '--dry-run'],
+      [binLink, inputFile('{"greeting":{"hi":"Hello"}}'), '--from', 'en', '--to', 'fr', '--dry-run'],
       { encoding: 'utf-8', cwd: tmpDir },
     );
 
@@ -138,10 +146,14 @@ describe('built CLI — stdout carries results only', () => {
   });
 
   test('two locales on stdout are one JSON document whose values are objects', () => {
-    const result = spawnSync(process.execPath, [binLink, '{"a":"x"}', '--from', 'en', '--to', 'es,pt', '--dry-run'], {
-      encoding: 'utf-8',
-      cwd: tmpDir,
-    });
+    const result = spawnSync(
+      process.execPath,
+      [binLink, inputFile('{"a":"x"}'), '--from', 'en', '--to', 'es,pt', '--dry-run'],
+      {
+        encoding: 'utf-8',
+        cwd: tmpDir,
+      },
+    );
 
     assert.equal(result.status, 0, `stderr: ${result.stderr}`);
     const parsed = JSON.parse(result.stdout);
@@ -151,10 +163,14 @@ describe('built CLI — stdout carries results only', () => {
   });
 
   test('emits no ANSI escapes when stderr is not a TTY', () => {
-    const result = spawnSync(process.execPath, [binLink, '{"a":"x"}', '--from', 'en', '--to', 'fr', '--dry-run'], {
-      encoding: 'utf-8',
-      cwd: tmpDir,
-    });
+    const result = spawnSync(
+      process.execPath,
+      [binLink, inputFile('{"a":"x"}'), '--from', 'en', '--to', 'fr', '--dry-run'],
+      {
+        encoding: 'utf-8',
+        cwd: tmpDir,
+      },
+    );
 
     assert.ok(!result.stderr.includes(ANSI_PREFIX), `stderr carried ANSI escapes: ${JSON.stringify(result.stderr)}`);
   });
@@ -171,7 +187,7 @@ describe('built CLI — --diff and --validate report on stdout', () => {
   test('--validate prints the report on stdout, only diagnostics on stderr, and exits 12 on a mismatch', () => {
     const result = spawnSync(
       process.execPath,
-      [binLink, '{"a":"x","b":"y"}', '--to', 'es', '--validate', '--output', target()],
+      [binLink, inputFile('{"a":"x","b":"y"}'), '--to', 'es', '--validate', '--output', target()],
       { encoding: 'utf-8', cwd: tmpDir },
     );
 
@@ -189,7 +205,7 @@ describe('built CLI — --diff and --validate report on stdout', () => {
 
     const result = spawnSync(
       process.execPath,
-      [binLink, '{"a":"x"}', '--to', 'es', '--validate', '--output', path.join(dir, '{locale}.json')],
+      [binLink, inputFile('{"a":"x"}'), '--to', 'es', '--validate', '--output', path.join(dir, '{locale}.json')],
       { encoding: 'utf-8', cwd: tmpDir },
     );
 
@@ -200,7 +216,7 @@ describe('built CLI — --diff and --validate report on stdout', () => {
   test('--diff prints the report on stdout and warns about the missing baseline on stderr', () => {
     const result = spawnSync(
       process.execPath,
-      [binLink, '{"a":"x","b":"y"}', '--to', 'es', '--diff', '--output', target()],
+      [binLink, inputFile('{"a":"x","b":"y"}'), '--to', 'es', '--diff', '--output', target()],
       { encoding: 'utf-8', cwd: tmpDir },
     );
 
@@ -217,6 +233,14 @@ describe('built CLI — expected failures have their own exit code', () => {
   function run(...args: string[]) {
     return spawnSync(process.execPath, [binLink, ...args], { encoding: 'utf-8', cwd: tmpDir });
   }
+
+  test('a JSON string is not an input: exits 13, a 300-character one included', () => {
+    for (const json of ['{"a":"b"}', `{"a":"${'x'.repeat(300)}"}`]) {
+      const result = run(json, '--from', 'en', '--to', 'es');
+
+      assert.equal(result.status, 13, `stderr: ${result.stderr}`);
+    }
+  });
 
   test('a missing input file exits 13 and names the path', () => {
     const result = run('nope.json', '--from', 'en', '--to', 'es');

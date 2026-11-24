@@ -23,6 +23,8 @@ interface ProcessChunkOptions {
   locales: string[];
   /** per locale, the keys written this run; processChunk adds to it. */
   delivered: Record<string, Set<string>>;
+  /** per locale, the keys the run turned down (a broken placeholder, a lost glossary term, a key it could not send); processChunk adds to it. */
+  rejected: Record<string, Set<string>>;
   /** called whenever a cut-off chunk is split, so the run can say so once. */
   onSplit: () => void;
   from: string;
@@ -80,6 +82,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
     engine,
     locales,
     delivered,
+    rejected,
     onSplit,
     from,
     sourceFlat,
@@ -93,13 +96,14 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
   } = opts;
 
   const noTranslate = glossaryModel?.noTranslate ?? [];
-  const { maskedChunk, maskMaps } = maskChunk(chunk, config.placeholderPatterns, noTranslate, (key, reason) =>
+  const { maskedChunk, maskMaps } = maskChunk(chunk, config.placeholderPatterns, noTranslate, (key, reason) => {
+    for (const locale of locales) rejected[locale].add(key);
     log.warning({
       code: 'NOT_SENT',
       message: `[${namespace}] Key "${key}" was not sent for translation: ${reason}`,
       key,
-    }),
-  );
+    });
+  });
   if (Object.keys(maskedChunk.keys).length === 0) {
     log('debug', `[${namespace}] Chunk ${i + 1}/${total} had nothing left to send`);
     return;
@@ -138,6 +142,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         // order is the translation's to change: `{name}` and `{count}` legitimately swap places.
         const fault = describePlaceholderFault(sent.keys[key], masked, map);
         if (fault) {
+          rejected[locale].add(key);
           log.warning({
             code: 'PLACEHOLDER_MISMATCH',
             message: `[${namespace}→${locale}] Key "${key}" ${fault} — skipped, will retry on next run`,
@@ -156,6 +161,7 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
             return locked && !value.toLowerCase().includes(locked.toLowerCase());
           });
           if (missingTerms.length > 0) {
+            rejected[locale].add(key);
             log.warning({
               code: 'MISSING_GLOSSARY_TERM',
               message: `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`,

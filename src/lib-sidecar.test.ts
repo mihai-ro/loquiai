@@ -41,6 +41,13 @@ function nextTmp(): string {
   return path.join(tmpDir, `test-${tmpCounter++}`);
 }
 
+/** The input file for a document: `translate()` and the CLI take paths only. */
+function inputFile(json: string): string {
+  const file = path.join(tmpDir, `input-${tmpCounter++}.json`);
+  fs.writeFileSync(file, json);
+  return file;
+}
+
 before(async () => {
   tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loqui-test-'));
 });
@@ -265,7 +272,7 @@ describe('translate — inputs sharing one hash sidecar', () => {
 describe('translate — a target locale starting with $', () => {
   test('is rejected, since the sidecar reserves those names', async () => {
     await assert.rejects(
-      () => translate({ input: '{"greeting":"hello"}', from: 'en', to: '$x', engine: makeEngine() }),
+      () => translate({ input: inputFile('{"greeting":"hello"}'), from: 'en', to: '$x', engine: makeEngine() }),
       (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_CONFIG',
     );
   });

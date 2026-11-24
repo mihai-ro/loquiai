@@ -2,7 +2,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type FailedRunResult, LoquiError } from './errors.js';
 import { buildGlossaryModel } from './glossary.js';
-import { localeStore, mergeOwnedHashes, ownerId, readSidecar, type Sidecar, saveSidecar } from './hasher.js';
+import {
+  type Attempt,
+  type Attempts,
+  hashValue,
+  localeStore,
+  mergeOwnedHashes,
+  ownerId,
+  readSidecar,
+  type Sidecar,
+  saveSidecar,
+} from './hasher.js';
 import type { TranslateOptions } from './lib.js';
 import {
   assertEveryLocaleMapped,
@@ -16,7 +26,10 @@ import {
 import { translateObject } from './translate-object.js';
 import { loadTranslationMemory, saveTranslationMemory } from './translation-memory.js';
 import type { LocaleHashes, ObjectRun, TranslateResult, TranslationMemory } from './types.js';
-import { writeFileAtomic } from './utils/json.js';
+import { setOwn, writeFileAtomic } from './utils/json.js';
+
+/** How many runs may turn a key down before it is left alone until its source changes. */
+const MAX_ATTEMPTS = 3;
 
 export async function translateFile(options: TranslateOptions): Promise<TranslateResult> {
   // A v2 JavaScript caller that still passes one of these would otherwise start a paid
@@ -41,8 +54,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   const to = resolveTargets(options.to, config);
   const { inputPath, source, sourceFlat, inlineGlossaryTerms } = loadSource(options.input, config);
 
-  const namespace =
-    options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
+  const namespace = options.namespace ?? path.basename(inputPath, path.extname(inputPath));
 
   const outputPaths = resolveOutputPaths(options.output, to);
   if (outputPaths) assertEveryLocaleMapped(outputPaths, to);
@@ -52,16 +64,15 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   // Read only when the run uses it: a corrupt sidecar it never consults must not fail it.
   const useIncremental = options.incremental || Boolean(options.hashFile);
   const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
-  const sidecar: Sidecar = hashFilePath && useIncremental ? readSidecar(hashFilePath) : { locales: {}, owners: {} };
+  const sidecar: Sidecar = useIncremental ? readSidecar(hashFilePath) : { locales: {}, owners: {}, attempts: {} };
   const hashStore: LocaleHashes = sidecar.locales;
-  // Inputs sharing one sidecar are told apart by their path from it; raw JSON has only its namespace.
-  const owner = hashFilePath && inputPath ? ownerId(hashFilePath, inputPath) : namespace;
+  // Inputs sharing one sidecar are told apart by their path from it.
+  const owner = ownerId(hashFilePath, inputPath);
 
   // load translation memory if enabled
   const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
   const tmFilePath = sidecarPath(inputPath, options.translationMemoryFile, 'tm');
-  const translationMemory: TranslationMemory =
-    useTranslationMemory && tmFilePath ? loadTranslationMemory(tmFilePath) : {};
+  const translationMemory: TranslationMemory = useTranslationMemory ? loadTranslationMemory(tmFilePath) : {};
 
   const glossaryModel = buildGlossaryModel(
     config.glossary,
@@ -72,7 +83,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
 
   /** Writes what a run produced, unless it is a dry run or nothing landed to write. */
   const persist = (
-    run: Pick<ObjectRun, 'locales' | 'hashes' | 'memory'>,
+    run: Pick<ObjectRun, 'locales' | 'hashes' | 'memory' | 'rejected'>,
     nothingLanded: boolean,
   ): Record<string, string> => {
     const written: Record<string, string> = {};
@@ -87,10 +98,13 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     }
     // A locale's hashes move only with its file: nothing written for it means it still
     // owes whatever it owed, whichever other locales this run delivered.
-    if (useIncremental && hashFilePath && Object.keys(written).length > 0) {
-      saveSidecar(hashFilePath, mergeRun(sidecar, owner, Object.keys(sourceFlat), Object.keys(written), run.hashes));
+    if (useIncremental && Object.keys(written).length > 0) {
+      saveSidecar(
+        hashFilePath,
+        mergeRun(sidecar, owner, sourceFlat, Object.keys(written), run, ownAttempts(sidecar.attempts, owner)),
+      );
     }
-    if (useTranslationMemory && tmFilePath) saveTranslationMemory(tmFilePath, run.memory);
+    if (useTranslationMemory) saveTranslationMemory(tmFilePath, run.memory);
     return written;
   };
 
@@ -106,6 +120,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
       memory: useTranslationMemory ? translationMemory : undefined,
       glossary: glossaryModel ?? undefined,
       force: options.force,
+      capped: useIncremental ? cappedKeys(ownAttempts(sidecar.attempts, owner), sourceFlat) : undefined,
       dryRun: options.dryRun,
       engine: options.engine,
       logger: options.logger,
@@ -120,7 +135,12 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     const { result } = err;
     const landed = result.stats.keysTranslated > 0;
     const written = persist(
-      { locales: result.locales, hashes: result.hashes ?? {}, memory: result.memory ?? {} },
+      {
+        locales: result.locales,
+        hashes: result.hashes ?? {},
+        memory: result.memory ?? {},
+        rejected: result.rejected ?? {},
+      },
       !landed,
     );
     throw completeFailure(err, { ...result, written }, landed, outputPaths !== null);
@@ -152,6 +172,57 @@ function completeFailure(
   return new LoquiError('CHUNK_FAILED', `${failure.message} ${outcome}`, { cause: failure.cause, result });
 }
 
+/** An input's own attempts, never another's and never one inherited from `Object.prototype`. */
+function ownAttempts(attempts: Attempts, owner: string): Record<string, Record<string, Attempt>> {
+  return Object.hasOwn(attempts, owner) ? attempts[owner] : {};
+}
+
+/** The keys each locale has turned down `MAX_ATTEMPTS` times for the source they have now. */
+function cappedKeys(
+  own: Record<string, Record<string, Attempt>>,
+  sourceFlat: Record<string, string>,
+): Record<string, string[]> {
+  return Object.fromEntries(
+    Object.entries(own).map(([locale, keys]) => [
+      locale,
+      Object.entries(keys)
+        .filter(
+          ([key, attempt]) =>
+            Object.hasOwn(sourceFlat, key) && attempt.hash === hashValue(sourceFlat[key]) && attempt.n >= MAX_ATTEMPTS,
+        )
+        .map(([key]) => key),
+    ]),
+  );
+}
+
+/**
+ * An input's attempts after a run that wrote `written`: a key the run turned down counts one
+ * more, unless its source changed since the last count. One that locale now holds, or the
+ * source no longer has, has none. One not sent this time (capped, or its chunk failed) keeps its count.
+ */
+function countAttempts(
+  own: Record<string, Record<string, Attempt>>,
+  sourceFlat: Record<string, string>,
+  written: string[],
+  run: Pick<ObjectRun, 'hashes' | 'rejected'>,
+): Record<string, Record<string, Attempt>> {
+  const next: Record<string, Record<string, Attempt>> = { ...own };
+  for (const locale of written) {
+    const before = Object.hasOwn(own, locale) ? own[locale] : {};
+    const turnedDown = new Set(Object.hasOwn(run.rejected, locale) ? run.rejected[locale] : []);
+    const kept: Record<string, Attempt> = {};
+    for (const key of Object.keys(sourceFlat)) {
+      const hash = hashValue(sourceFlat[key]);
+      const prior = Object.hasOwn(before, key) && before[key].hash === hash ? before[key] : undefined;
+      if (turnedDown.has(key)) setOwn(kept, key, { hash, n: (prior?.n ?? 0) + 1 });
+      else if (prior && localeStore(run.hashes, locale)?.[key] !== hash) setOwn(kept, key, prior);
+    }
+    if (Object.keys(kept).length > 0) setOwn(next, locale, kept);
+    else delete next[locale];
+  }
+  return next;
+}
+
 /**
  * The sidecar after this input delivered `delivered`: their hashes merged in per owner, and
  * this input's key list moved to its current source. A key it dropped stays on the list
@@ -160,10 +231,13 @@ function completeFailure(
 function mergeRun(
   sidecar: Sidecar,
   ownerId: string,
-  sourceKeys: string[],
+  sourceFlat: Record<string, string>,
   delivered: string[],
-  runHashes: LocaleHashes,
+  run: Pick<ObjectRun, 'hashes' | 'rejected'>,
+  ownBefore: Record<string, Record<string, Attempt>>,
 ): Sidecar {
+  const sourceKeys = Object.keys(sourceFlat);
+  const runHashes = run.hashes;
   const ownedBefore = new Set(Object.hasOwn(sidecar.owners, ownerId) ? sidecar.owners[ownerId] : []);
   const ownedByOthers = new Set(Object.entries(sidecar.owners).flatMap(([id, keys]) => (id === ownerId ? [] : keys)));
   const locales: LocaleHashes = { ...sidecar.locales };
@@ -178,5 +252,9 @@ function mergeRun(
   }
   const held = new Set(Object.values(locales).flatMap((store) => Object.keys(store)));
   const owned = new Set([...sourceKeys, ...[...ownedBefore].filter((key) => held.has(key))]);
-  return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] } };
+  const attempts: Attempts = { ...sidecar.attempts };
+  const own = countAttempts(ownBefore, sourceFlat, delivered, run);
+  if (Object.keys(own).length > 0) setOwn(attempts, ownerId, own);
+  else delete attempts[ownerId];
+  return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] }, attempts };
 }

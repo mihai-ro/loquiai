@@ -221,11 +221,11 @@ describe('diff() and validate() — inputs', () => {
     );
   });
 
-  test('take the output as a locale → path record, and the input as a raw JSON string', () => {
+  test('take the output as a locale → path record', () => {
     const p = project({ a: 'Hello' }, { es: { a: 'Hola' } });
 
     const results = validate({
-      input: '{"a":"Hello","b":"World"}',
+      input: project({ a: 'Hello', b: 'World' }).input,
       to: ['es'],
       output: { es: path.join(p.dir, 'es.json') },
       configPath: root,
@@ -249,8 +249,10 @@ describe('diff() and validate() — inputs', () => {
   });
 
   test('a source that is not JSON fails with PARSE_ERROR', () => {
+    const input = path.join(project({}).dir, 'broken.json');
+    fs.writeFileSync(input, '{not json');
     assert.throws(
-      () => validate({ input: '{not json', to: ['es'], output: {}, configPath: root }),
+      () => validate({ input, to: ['es'], output: {}, configPath: root }),
       (err: unknown) => (err as { code?: string }).code === 'PARSE_ERROR',
     );
   });

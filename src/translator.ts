@@ -11,7 +11,9 @@ import type {
   HashStore,
   LocaleHashes,
   LoquiConfig,
+  RunLog,
   RunStats,
+  RunWarning,
   TranslationMemory,
 } from './types.js';
 import { isUntranslated } from './untranslated.js';
@@ -43,7 +45,7 @@ export interface TranslateJobResult {
    * The run's log. A caller that has something to say after the run, such as the file
    * layer's note about pruned keys, says it here so it lands in `stats.warnings` too.
    */
-  log: LogFn;
+  log: RunLog;
   /**
    * Set when chunks failed. The caller persists what succeeded and then raises this,
    * so a partial run still leaves its output on disk.
@@ -52,14 +54,21 @@ export interface TranslateJobResult {
 }
 
 /**
- * The one writer of `stats.warnings`: a `warn` is recorded in the run's stats and every
+ * The one writer of `stats.warnings`: a warning is recorded in the run's stats and its
  * message goes to the caller's logger, so the two can never disagree.
  */
-function createRunLog(stats: RunStats, logger: LogFn): LogFn {
-  return (level, message) => {
-    if (level === 'warn') stats.warnings.push(message);
+function createRunLog(stats: RunStats, logger: LogFn): RunLog {
+  // What reaches the plain log is what an engine said: the run's own findings use `warning`.
+  const log: LogFn = (level, message) => {
+    if (level === 'warn') stats.warnings.push({ code: 'ENGINE_RESPONSE', message });
     logger(level, message);
   };
+  return Object.assign(log, {
+    warning(warning: RunWarning): void {
+      stats.warnings.push(warning);
+      logger('warn', warning.message);
+    },
+  });
 }
 
 export async function translateJson(opts: TranslateJobOptions): Promise<TranslateJobResult> {
@@ -233,8 +242,10 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     const onSplit = (): void => {
       if (splitReported) return;
       splitReported = true;
-      const w = `[${namespace}] Some responses were cut off at the engine's output limit and re-sent in halves. The cut-off ones were still billed; a lower splitToken avoids paying for them.`;
-      log('warn', w);
+      log.warning({
+        code: 'CUT_OFF',
+        message: `[${namespace}] Some responses were cut off at the engine's output limit and re-sent in halves. The cut-off ones were still billed; a lower splitToken avoids paying for them.`,
+      });
     };
 
     const tasks = chunks.map(({ chunk, locales }, i) => async () => {
@@ -277,8 +288,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
       // partial result out: the caller writes it, and the hash store below records
       // only what landed, so the next run retries exactly the gap.
       for (const e of err.errors) {
-        const msg = `[${namespace}] ${(e as Error).message}`;
-        log('warn', msg);
+        log.warning({ code: 'CHUNK_FAILED', message: `[${namespace}] ${(e as Error).message}` });
       }
       stats.failedChunks = err.errors.length;
       failure = collapseChunkFailure(err, chunks.length, namespace);

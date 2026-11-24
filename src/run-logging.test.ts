@@ -175,14 +175,17 @@ describe('the messages a logger receives', () => {
     });
 
     assert.ok(
-      stats.warnings.some((w) => w.includes('Engine response missing locale "pt"')),
+      stats.warnings.some((w) => w.message.includes('Engine response missing locale "pt"')),
       'engine warning missing',
     );
     assert.ok(
-      stats.warnings.some((w) => w.includes('Empty translation')),
+      stats.warnings.some((w) => w.message.includes('Empty translation')),
       'run warning missing',
     );
-    assert.deepEqual(given.at('warn'), stats.warnings);
+    assert.deepEqual(
+      given.at('warn'),
+      stats.warnings.map((w) => w.message),
+    );
   });
 
   test('progress arrives at info and per-chunk detail at debug', async () => {
@@ -233,9 +236,12 @@ describe('the messages a logger receives', () => {
     log('warn', 'after the run');
     log('debug', 'not a warning');
 
-    assert.equal(stats.warnings.at(-1), 'after the run');
-    assert.ok(!stats.warnings.includes('not a warning'));
-    assert.deepEqual(given.at('warn'), stats.warnings);
+    assert.equal(stats.warnings.at(-1)?.message, 'after the run');
+    assert.ok(!stats.warnings.some((w) => w.message === 'not a warning'));
+    assert.deepEqual(
+      given.at('warn'),
+      stats.warnings.map((w) => w.message),
+    );
   });
 });
 
@@ -268,8 +274,14 @@ describe('two runs at once', () => {
 
     const messagesA = a.entries.map((e) => e.message);
     const messagesB = b.entries.map((e) => e.message);
-    assert.deepEqual(runA.stats.warnings, a.at('warn'));
-    assert.deepEqual(runB.stats.warnings, b.at('warn'));
+    assert.deepEqual(
+      runA.stats.warnings.map((w) => w.message),
+      a.at('warn'),
+    );
+    assert.deepEqual(
+      runB.stats.warnings.map((w) => w.message),
+      b.at('warn'),
+    );
     assert.ok(messagesA.length > 0 && messagesB.length > 0);
     assert.ok(
       messagesA.every((m) => !m.includes('[beta') && !m.includes('all 2 key(s)')),
@@ -335,7 +347,10 @@ describe('an engine and the logger', () => {
       logger: given.log,
     });
 
-    assert.ok(stats.warnings.includes('said by the engine'));
+    assert.deepEqual(
+      stats.warnings.filter((w) => w.message === 'said by the engine'),
+      [{ code: 'ENGINE_RESPONSE', message: 'said by the engine' }],
+    );
     assert.ok(given.at('warn').includes('said by the engine'));
   });
 });

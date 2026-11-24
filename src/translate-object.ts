@@ -88,10 +88,11 @@ export async function translateObject(source: JsonObject, options: TranslateObje
       );
       if (dropped.length === 0) continue;
       removed[locale] = dropped;
-      log(
-        'warn',
-        `[${namespace}→${locale}] ${options.dryRun ? 'Would remove' : 'Removed'} ${dropped.length} key(s) the source no longer has`,
-      );
+      log.warning({
+        code: 'REMOVED_KEYS',
+        message: `[${namespace}→${locale}] ${options.dryRun ? 'Would remove' : 'Removed'} ${dropped.length} key(s) the source no longer has`,
+        locale,
+      });
       for (const key of dropped) log('debug', `  - ${locale}: ${key}`);
     }
   }

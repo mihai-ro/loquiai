@@ -12,6 +12,8 @@ import {
   LoquiError,
   type LoquiConfig,
   type ReviewChunkRequest,
+  type RunWarning,
+  type RunWarningCode,
   stderrLogger,
   type TranslateChunkRequest,
   type TranslationRun,
@@ -65,4 +67,7 @@ const notAString: string = translate;
 // @ts-expect-error './cli' is not exported
 import type {} from '@mihairo/loqui/cli';
 
-export { changes, checks, core, engine, logger, notAString, result, run, SubclassEngine };
+const code: RunWarningCode = 'PLACEHOLDER_MISMATCH';
+const warning: RunWarning = { code, message: 'x', locale: 'es', key: 'a' };
+
+export { changes, checks, core, engine, logger, notAString, result, run, SubclassEngine, warning };

@@ -8,6 +8,7 @@ import {
   CONFIG_DEFAULTS,
   type EngineAdapter,
   type LoquiConfig,
+  type RunWarning,
   type TranslateChunkRequest,
   type TranslationResult,
 } from './types.js';
@@ -69,7 +70,7 @@ describe('translateJson — placeholder validation', () => {
     // Broken translation must NOT overwrite the existing one
     assert.equal(translations.fr.desc, 'existing translation');
     // Warning must be emitted
-    assert.ok(stats.warnings.some((w) => w.includes('desc') && w.includes('${GLOSSARY.USER_PLURAL}')));
+    assert.ok(stats.warnings.some((w) => w.message.includes('desc') && w.message.includes('${GLOSSARY.USER_PLURAL}')));
   });
 
   test('does not skip a translation where all placeholders are preserved', async () => {
@@ -87,7 +88,7 @@ describe('translateJson — placeholder validation', () => {
     });
 
     assert.ok(translations.fr.desc?.includes('${name}'));
-    assert.equal(stats.warnings.filter((w) => w.includes('missing placeholders')).length, 0);
+    assert.equal(stats.warnings.filter((w) => w.message.includes('missing placeholders')).length, 0);
   });
 
   test('accepts a tag that contains a noTranslate term', async () => {
@@ -133,7 +134,11 @@ describe('translateJson — placeholder validation', () => {
     });
 
     assert.equal(translations.es.bold, undefined);
-    assert.ok(stats.warnings.some((w) => w.includes('missing placeholders: <b>')));
+    assert.ok(stats.warnings.some((w) => w.message.includes('missing placeholders: <b>')));
+    assert.deepEqual(
+      stats.warnings.map(({ code, locale, key }) => ({ code, locale, key })),
+      [{ code: 'PLACEHOLDER_MISMATCH', locale: 'es', key: 'bold' }],
+    );
   });
 });
 
@@ -315,7 +320,7 @@ describe('translateJson — chunk failure handling', () => {
     });
 
     assert.equal(stats.failedChunks, 1);
-    assert.ok(stats.warnings.some((w) => w.includes('API exploded')));
+    assert.ok(stats.warnings.some((w) => w.message.includes('API exploded')));
   });
 
   test('keeps the output of the chunks that succeeded', async () => {
@@ -567,7 +572,7 @@ describe('translateJson — a malformed ICU value', () => {
 
     assert.deepEqual(sent.sort(), ['farewell', 'greeting'], 'the malformed value must never reach the engine');
     assert.ok(
-      stats.warnings.some((w) => w.includes('"bought"')),
+      stats.warnings.some((w) => w.message.includes('"bought"')),
       'the warning has to name the key',
     );
     assert.equal(translations.fr.greeting, 'HELLO');
@@ -607,7 +612,7 @@ describe('translateJson — a malformed ICU value', () => {
 
     assert.deepEqual(sent, []);
     assert.equal(stats.apiRequests, 0);
-    assert.ok(stats.warnings.some((w) => w.includes('"bought"')));
+    assert.ok(stats.warnings.some((w) => w.message.includes('"bought"')));
   });
 
   test('an invalid placeholder pattern still fails the run', async () => {
@@ -623,7 +628,7 @@ describe('translateJson — a malformed ICU value', () => {
 
     assert.ok(failure, 'a config error must not be swallowed as a skipped key');
     assert.equal(stats.failedChunks, 1);
-    assert.ok(stats.warnings.some((w) => w.includes('Invalid placeholder pattern')));
+    assert.ok(stats.warnings.some((w) => w.message.includes('Invalid placeholder pattern')));
   });
 });
 
@@ -948,9 +953,9 @@ describe('translateJson — a truncated chunk is split', () => {
       engine,
     });
 
-    assert.ok(stats.warnings.some((w) => w.includes('exploded on k0+k1')));
+    assert.ok(stats.warnings.some((w) => w.message.includes('exploded on k0+k1')));
     assert.ok(
-      stats.warnings.some((w) => w.includes('exploded on k2+k3')),
+      stats.warnings.some((w) => w.message.includes('exploded on k2+k3')),
       'the second half failed too',
     );
   });
@@ -958,7 +963,7 @@ describe('translateJson — a truncated chunk is split', () => {
   describe('the cost of splitting', () => {
     // two keys per chunk at splitToken 500; an engine that fits one key per call splits every chunk
     const wide = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`w${i}`, `${'word '.repeat(80)}${i}`]));
-    const splitNotes = (warnings: string[]) => warnings.filter((w) => /re-sent in halves/.test(w));
+    const splitNotes = (warnings: RunWarning[]) => warnings.filter((w) => /re-sent in halves/.test(w.message));
 
     test('is reported once per run, however many chunks split', async () => {
       const { stats } = await translateJson({
@@ -972,7 +977,8 @@ describe('translateJson — a truncated chunk is split', () => {
       });
 
       assert.equal(splitNotes(stats.warnings).length, 1);
-      assert.ok(splitNotes(stats.warnings)[0].includes('splitToken'), 'the warning names what avoids the cost');
+      assert.ok(splitNotes(stats.warnings)[0].message.includes('splitToken'), 'the warning names what avoids the cost');
+      assert.equal(splitNotes(stats.warnings)[0].code, 'CUT_OFF');
     });
 
     test('is not reported when nothing was cut off', async () => {
@@ -1001,7 +1007,7 @@ describe('translateJson — a truncated chunk is split', () => {
       engine: limitedEngine(1),
     });
 
-    assert.equal(stats.warnings.filter((w) => w.includes('"bad"')).length, 1);
+    assert.equal(stats.warnings.filter((w) => w.message.includes('"bad"')).length, 1);
   });
 
   test('a review pass that is cut off splits the chunk too', async () => {
@@ -1219,7 +1225,7 @@ describe('translateJson — locale linting', () => {
     });
     assert.equal(result.translations.fr.greeting, 'Hello');
     assert.ok(
-      result.stats.warnings.some((w) => w.includes('untranslated') && w.includes('greeting')),
+      result.stats.warnings.some((w) => w.message.includes('untranslated') && w.message.includes('greeting')),
       'should warn about untranslated key',
     );
   });
@@ -1237,7 +1243,7 @@ describe('translateJson — locale linting', () => {
       engine,
     });
     assert.ok(
-      result.stats.warnings.every((w) => !w.includes('untranslated')),
+      result.stats.warnings.every((w) => !w.message.includes('untranslated')),
       'should not warn when source and target locale are the same',
     );
   });
@@ -1255,7 +1261,7 @@ describe('translateJson — locale linting', () => {
       engine,
     });
     assert.ok(
-      result.stats.warnings.some((w) => w.includes('hallucination') && w.includes('key')),
+      result.stats.warnings.some((w) => w.message.includes('hallucination') && w.message.includes('key')),
       'should warn about excessively long translation',
     );
   });
@@ -1273,7 +1279,7 @@ describe('translateJson — locale linting', () => {
       engine,
     });
     assert.ok(
-      result.stats.warnings.every((w) => !w.includes('hallucination')),
+      result.stats.warnings.every((w) => !w.message.includes('hallucination')),
       'should not warn for normal translation length',
     );
   });
@@ -1461,7 +1467,7 @@ describe('translateJson — glossary enforcement', () => {
 
     // key skipped → existing value preserved (retry next run)
     assert.equal(translations.es.title, 'existing value');
-    assert.ok(stats.warnings.some((w) => w.includes('missing glossary term')));
+    assert.ok(stats.warnings.some((w) => w.message.includes('missing glossary term')));
   });
 
   test('saves a key when locked glossary term is present in translation', async () => {

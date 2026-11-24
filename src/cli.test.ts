@@ -485,7 +485,7 @@ describe('main — a run that fails after some work', () => {
     }
 
     assert.ok(failure instanceof LoquiError && failure.code === 'AUTH', String(failure));
-    const warning = failure.result?.stats.warnings[0];
+    const warning = failure.result?.stats.warnings[0]?.message;
     assert.ok(warning, 'the failed run should carry the warning its chunk raised');
     const printed = streams?.err.split(warning).length ?? 0;
     assert.equal(printed - 1, 2, 'the warning prints live and again in the summary');

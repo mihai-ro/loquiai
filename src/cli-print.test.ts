@@ -67,7 +67,18 @@ describe('logStats — the end-of-run summary', () => {
 
   test('prints the failure count, the totals line and every warning again', async () => {
     const err = await plain(() =>
-      logStats(stats({ keysTranslated: 3, apiRequests: 2, elapsedMs: 1500, failedChunks: 1, warnings: ['w1', 'w2'] })),
+      logStats(
+        stats({
+          keysTranslated: 3,
+          apiRequests: 2,
+          elapsedMs: 1500,
+          failedChunks: 1,
+          warnings: [
+            { code: 'ENGINE_RESPONSE', message: 'w1' },
+            { code: 'ENGINE_RESPONSE', message: 'w2' },
+          ],
+        }),
+      ),
     );
 
     assert.equal(

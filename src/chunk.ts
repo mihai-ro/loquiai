@@ -7,12 +7,12 @@ import type {
   FlatTranslations,
   GlossaryModel,
   LoquiConfig,
+  RunLog,
   RunStats,
   TranslateChunkRequest,
   TranslationChunk,
   TranslationResult,
 } from './types.js';
-import type { LogFn } from './utils/logger.js';
 
 interface ProcessChunkOptions {
   chunk: TranslationChunk;
@@ -31,8 +31,8 @@ interface ProcessChunkOptions {
   workingTargets: Record<string, FlatTranslations>;
   config: LoquiConfig;
   stats: RunStats;
-  /** the run's log: a `warn` through it is also recorded in `stats.warnings`. */
-  log: LogFn;
+  /** the run's log: what it warns about is also recorded in `stats.warnings`. */
+  log: RunLog;
   /** narrows this run's concurrency pool; handed to the engine with each request. */
   onRateLimited: () => void;
   glossaryModel?: GlossaryModel;
@@ -62,11 +62,13 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
   } = opts;
 
   const noTranslate = glossaryModel?.noTranslate ?? [];
-  const { maskedChunk, maskMaps, skipped } = maskChunk(chunk, config.placeholderPatterns, noTranslate);
-  for (const [key, reason] of Object.entries(skipped)) {
-    const w = `[${namespace}] Key "${key}" was not sent for translation: ${reason}`;
-    log('warn', w);
-  }
+  const { maskedChunk, maskMaps } = maskChunk(chunk, config.placeholderPatterns, noTranslate, (key, reason) =>
+    log.warning({
+      code: 'NOT_SENT',
+      message: `[${namespace}] Key "${key}" was not sent for translation: ${reason}`,
+      key,
+    }),
+  );
   if (Object.keys(maskedChunk.keys).length === 0) {
     log('debug', `[${namespace}] Chunk ${i + 1}/${total} had nothing left to send`);
     return;
@@ -89,8 +91,12 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         const value = restorePlaceholders(masked, map);
 
         if (!value.trim()) {
-          const w = `[${namespace}→${locale}] Empty translation for key: "${key}"`;
-          log('warn', w);
+          log.warning({
+            code: 'EMPTY_TRANSLATION',
+            message: `[${namespace}→${locale}] Empty translation for key: "${key}"`,
+            locale,
+            key,
+          });
           continue;
         }
 
@@ -101,8 +107,12 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
           .filter((s) => sent.keys[key].includes(s) && !masked.includes(s))
           .map((s) => restorePlaceholders(map[s], map));
         if (missing.length > 0) {
-          const w = `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${[...new Set(missing)].join(', ')} — skipped, will retry on next run`;
-          log('warn', w);
+          log.warning({
+            code: 'PLACEHOLDER_MISMATCH',
+            message: `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${[...new Set(missing)].join(', ')} — skipped, will retry on next run`,
+            locale,
+            key,
+          });
           continue;
         }
 
@@ -114,8 +124,12 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
             return locked && !value.toLowerCase().includes(locked.toLowerCase());
           });
           if (missingTerms.length > 0) {
-            const w = `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`;
-            log('warn', w);
+            log.warning({
+              code: 'MISSING_GLOSSARY_TERM',
+              message: `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`,
+              locale,
+              key,
+            });
             continue;
           }
         }
@@ -125,15 +139,23 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         // Untranslated detection: value identical to source suggests the model
         // returned the input unchanged. Warn but save — could be a proper noun.
         if (locale !== from && sourceValue.trim() !== '' && value.trim() === sourceValue.trim()) {
-          const w = `[${namespace}→${locale}] Key "${key}" appears untranslated (identical to source)`;
-          log('warn', w);
+          log.warning({
+            code: 'UNTRANSLATED',
+            message: `[${namespace}→${locale}] Key "${key}" appears untranslated (identical to source)`,
+            locale,
+            key,
+          });
         }
 
         // Length explosion: ratio > 4× source is almost certainly a hallucination.
         if (sourceValue.length > 0 && value.length > sourceValue.length * MAX_EXPANSION_RATIO) {
           const ratio = Math.round(value.length / sourceValue.length);
-          const w = `[${namespace}→${locale}] Key "${key}" translation is ${ratio}× source length — possible hallucination`;
-          log('warn', w);
+          log.warning({
+            code: 'LENGTH_RATIO',
+            message: `[${namespace}→${locale}] Key "${key}" translation is ${ratio}× source length — possible hallucination`,
+            locale,
+            key,
+          });
         }
 
         workingTargets[locale][key] = value;
@@ -185,8 +207,10 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
       }
       // Only the first is thrown, and the pool reports that one; the rest would vanish.
       for (const other of failures.slice(1)) {
-        const w = `[${namespace}] Chunk ${i + 1}/${total} also failed: ${other instanceof Error ? other.message : String(other)}`;
-        log('warn', w);
+        log.warning({
+          code: 'CHUNK_FAILED',
+          message: `[${namespace}] Chunk ${i + 1}/${total} also failed: ${other instanceof Error ? other.message : String(other)}`,
+        });
       }
       if (failures.length > 0) throw failures[0];
       return;
@@ -203,15 +227,14 @@ function maskChunk(
   chunk: TranslationChunk,
   customPatterns?: string[],
   noTranslate: string[] = [],
+  /** called for a key left out of the chunk, with why. One malformed value must not fail the keys beside it. */
+  onSkipped: (key: string, reason: string) => void = () => {},
 ): {
   maskedChunk: TranslationChunk;
   maskMaps: Record<string, Record<string, string>>;
-  /** keys left out of the chunk, with why. One malformed value must not fail the keys beside it. */
-  skipped: Record<string, string>;
 } {
   const maskedKeys: FlatTranslations = {};
   const maskMaps: Record<string, Record<string, string>> = {};
-  const skipped: Record<string, string> = {};
   for (const [key, value] of Object.entries(chunk.keys)) {
     // 1) mask do-not-translate terms first (T-prefix range: ⟦T0⟧, ⟦T1⟧…)
     const termMask = maskTerms(value, noTranslate, 0);
@@ -223,10 +246,10 @@ function maskChunk(
     } catch (err) {
       // Only the value's own malformation is skippable; a bad config pattern fails every key alike.
       if (!(err instanceof IcuMaskError)) throw err;
-      skipped[key] = err.message;
+      onSkipped(key, err.message);
     }
   }
-  return { maskedChunk: { keys: maskedKeys }, maskMaps, skipped };
+  return { maskedChunk: { keys: maskedKeys }, maskMaps };
 }
 
 // Exported for unit testing.

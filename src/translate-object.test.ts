@@ -170,7 +170,11 @@ describe('translateObject — existing documents and removed keys', () => {
     assert.deepEqual([...run.removed.es].sort(), ['old.deep', 'stale']);
     assert.deepEqual(run.removed.pt, []);
     assert.deepEqual(run.locales.es, { a: 'Hola' });
-    assert.ok(run.stats.warnings.some((w) => /es\W.*Removed 2 key\(s\)/.test(w)));
+    assert.ok(run.stats.warnings.some((w) => /es\W.*Removed 2 key\(s\)/.test(w.message)));
+    assert.deepEqual(
+      run.stats.warnings.map(({ code, locale }) => ({ code, locale })),
+      [{ code: 'REMOVED_KEYS', locale: 'es' }],
+    );
   });
 
   test('a dry run says it would remove them', async () => {
@@ -180,7 +184,7 @@ describe('translateObject — existing documents and removed keys', () => {
     );
 
     assert.deepEqual(run.removed.es, ['stale']);
-    assert.ok(run.stats.warnings.some((w) => /Would remove 1 key\(s\)/.test(w)));
+    assert.ok(run.stats.warnings.some((w) => /Would remove 1 key\(s\)/.test(w.message)));
   });
 });
 

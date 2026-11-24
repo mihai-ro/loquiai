@@ -122,6 +122,35 @@ export interface GlossaryModel {
   noTranslate: string[];
 }
 
+/** What a warning is about, so a caller can act on it without matching message text. */
+export type RunWarningCode =
+  | 'PLACEHOLDER_MISMATCH'
+  | 'MISSING_GLOSSARY_TERM'
+  | 'EMPTY_TRANSLATION'
+  | 'UNTRANSLATED'
+  | 'LENGTH_RATIO'
+  | 'NOT_SENT'
+  | 'CHUNK_FAILED'
+  | 'CUT_OFF'
+  | 'REMOVED_KEYS'
+  | 'ENGINE_RESPONSE';
+
+/** A non-fatal problem a run hit, with the locale and key it concerns when it has them. */
+export interface RunWarning {
+  code: RunWarningCode;
+  message: string;
+  locale?: string;
+  key?: string;
+}
+
+/**
+ * A run's log: a plain `LogFn` for what an engine says, and `warning()` for what the run
+ * itself found. Both record into `stats.warnings` and reach the caller's logger.
+ */
+export interface RunLog extends LogFn {
+  warning(warning: RunWarning): void;
+}
+
 /** Runtime statistics collected during a translation run. */
 export interface RunStats {
   /** Number of keys successfully translated. */
@@ -131,7 +160,7 @@ export interface RunStats {
   /** Total elapsed time in milliseconds. */
   elapsedMs: number;
   /** Non-fatal warnings emitted during the run. */
-  warnings: string[];
+  warnings: RunWarning[];
   /** Chunks that failed after all retries. Their keys are absent from the output. */
   failedChunks: number;
 }

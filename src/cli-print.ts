@@ -40,7 +40,7 @@ export function logStats(stats: RunStats): void {
     );
   }
   for (const w of stats.warnings) {
-    stderrLogger('warn', w);
+    stderrLogger('warn', w.message);
   }
 }
 

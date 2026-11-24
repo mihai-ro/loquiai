@@ -16,4 +16,7 @@ const notAString: string = loqui.translate;
 // @ts-expect-error './cli' is not exported
 import type {} from '@mihairo/loqui/cli';
 
-export = { changes, checks, core, logger, notAString, result, run };
+const code: loqui.RunWarningCode = 'PLACEHOLDER_MISMATCH';
+const warning: loqui.RunWarning = { code, message: 'x', locale: 'es', key: 'a' };
+
+export = { changes, checks, core, logger, notAString, result, run, warning };

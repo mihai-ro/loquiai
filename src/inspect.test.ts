@@ -26,7 +26,7 @@ function project(source: object, targets: Record<string, object> = {}, hashes?: 
   for (const [locale, doc] of Object.entries(targets)) {
     fs.writeFileSync(path.join(dir, `${locale}.json`), JSON.stringify(doc), 'utf-8');
   }
-  if (hashes) fs.writeFileSync(path.join(dir, '.en.loqui-hash.json'), JSON.stringify(hashes), 'utf-8');
+  if (hashes) fs.writeFileSync(path.join(dir, '.en.loqui-hash.json'), JSON.stringify({ es: hashes }), 'utf-8');
   return { dir, input, output: path.join(dir, '{locale}.json'), configPath: root };
 }
 
@@ -64,7 +64,7 @@ describe('diff()', () => {
   test('reads the sidecar from hashFile when one is given', () => {
     const p = project({ a: 'Hello' }, { es: { a: 'Hola' } });
     const hashFile = path.join(p.dir, 'custom-hashes.json');
-    fs.writeFileSync(hashFile, JSON.stringify({ a: hashValue('Hello') }), 'utf-8');
+    fs.writeFileSync(hashFile, JSON.stringify({ es: { a: hashValue('Hello') } }), 'utf-8');
 
     assert.equal(diff({ input: p.input, to: ['es'], output: p.output, hashFile, configPath: root }).hasBaseline, true);
   });

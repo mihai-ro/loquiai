@@ -66,14 +66,6 @@ describe('loadHashStore', () => {
 
   test('reads a per-locale sidecar as it is', () => {
     const file = sidecar({ es: { a: 'ha' }, de: { a: 'hb' } });
-    assert.deepEqual(loadHashStore(file, ['es']), { es: { a: 'ha' }, de: { a: 'hb' } });
-  });
-
-  test('a v2 flat sidecar applies to every locale in `to`, and to no other', () => {
-    const file = sidecar({ a: 'ha', b: 'hb' });
-    assert.deepEqual(loadHashStore(file, ['es', 'pt']), {
-      es: { a: 'ha', b: 'hb' },
-      pt: { a: 'ha', b: 'hb' },
-    });
+    assert.deepEqual(loadHashStore(file), { es: { a: 'ha' }, de: { a: 'hb' } });
   });
 });

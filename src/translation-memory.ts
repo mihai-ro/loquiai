@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { LoquiError } from './errors.js';
 import type { TranslationMemory } from './types.js';
 import { readJson, writeJson } from './utils/json.js';
 
@@ -22,24 +23,20 @@ export function memoryKey(value: string): string {
 
 /**
  * Loads a translation memory from a JSON file.
- * Returns an empty translation memory if the file does not exist. Warnings come back
- * as data: the caller's run logs them, so loading prints nothing.
+ * Returns an empty translation memory if the file does not exist. A file with a key in
+ * the old 8-character format is refused: the run would rewrite it without those entries
+ * and the translations in them would be paid for again, so `loqui migrate` converts it first.
  */
-export function loadTranslationMemory(tmPath: string): { memory: TranslationMemory; warnings: string[] } {
+export function loadTranslationMemory(tmPath: string): TranslationMemory {
   const data = readJson(tmPath) as TranslationMemory;
-  // Entries from before keys became memoryKey()s are 8-character hashes that can never
-  // match again; keeping them would only carry dead weight into every rewrite.
-  const current: TranslationMemory = {};
-  let dropped = 0;
-  for (const [key, entry] of Object.entries(data)) {
-    if (isMemoryKey(key)) current[key] = entry;
-    else dropped++;
+  const old = Object.keys(data).filter((key) => !isMemoryKey(key));
+  if (old.length > 0) {
+    throw new LoquiError(
+      'INVALID_CONFIG',
+      `${tmPath} holds ${old.length} translation-memory entr${old.length === 1 ? 'y' : 'ies'} in the v2 key format, which v3 does not read. Convert the file once with \`loqui migrate\`.`,
+    );
   }
-  const warnings =
-    dropped > 0
-      ? [`${tmPath}: ignored ${dropped} translation-memory entr${dropped === 1 ? 'y' : 'ies'} in the old key format.`]
-      : [];
-  return { memory: current, warnings };
+  return data;
 }
 
 /**

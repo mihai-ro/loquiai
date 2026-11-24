@@ -6,7 +6,7 @@ import { Writable } from 'node:stream';
 import { after, before, describe, test } from 'node:test';
 import { main } from './cli.js';
 import { parseMigrateArgs, runMigrate } from './cli-migrate.js';
-import { LoquiError } from './errors.js';
+import { EXIT_CODES, LoquiError } from './errors.js';
 import { hashValue } from './hasher.js';
 import { translate } from './lib.js';
 import { memoryKey } from './translation-memory.js';
@@ -222,5 +222,87 @@ describe('loqui migrate — usage', () => {
     } finally {
       process.argv = real;
     }
+  });
+});
+
+describe('the CLI on a v2 sidecar', () => {
+  test('exits 9 naming loqui migrate, and writes nothing', async () => {
+    const p = project();
+    const a = p.write('a.json', { k1: 'one' });
+    p.write('h.json', { k1: hashValue('one') });
+    const real = process.argv;
+    const realErr = process.stderr.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      process.argv = [
+        'node',
+        'loqui',
+        ...['--input', a, '--from', 'en', '--to', 'es', '--output', p.file('{locale}.json')],
+        ...['--hash-file', p.file('h.json'), '--config', p.dir],
+      ];
+      await assert.rejects(
+        main(),
+        (err: unknown) =>
+          err instanceof LoquiError && EXIT_CODES[err.code] === 9 && err.message.includes('loqui migrate'),
+      );
+    } finally {
+      process.argv = real;
+      process.stderr.write = realErr;
+    }
+    assert.equal(fs.existsSync(p.file('es.json')), false);
+    assert.deepEqual(p.read('h.json'), { k1: hashValue('one') });
+  });
+});
+
+describe('a v2 translation-memory file', () => {
+  const engine: EngineAdapter = {
+    async translateChunk() {
+      throw new Error('a refused run must not reach the engine');
+    },
+  };
+
+  test('is refused by translate() and the CLI, and left untouched', async () => {
+    const p = project();
+    const a = p.write('a.json', { k1: 'one' });
+    const tm = p.write('tm.json', { [hashValue('one')]: { es: 'uno' } });
+    const before = fs.readFileSync(tm, 'utf-8');
+    const refused = (err: unknown) =>
+      err instanceof LoquiError &&
+      err.code === 'INVALID_CONFIG' &&
+      EXIT_CODES[err.code] === 9 &&
+      err.message.includes('loqui migrate');
+
+    await assert.rejects(
+      translate({
+        input: a,
+        from: 'en',
+        to: ['es'],
+        output: p.file('{locale}.json'),
+        translationMemory: true,
+        translationMemoryFile: tm,
+        configPath: p.dir,
+        engine,
+      }),
+      refused,
+    );
+
+    const real = process.argv;
+    const realErr = process.stderr.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      process.argv = [
+        'node',
+        'loqui',
+        ...['--input', a, '--from', 'en', '--to', 'es', '--output', p.file('{locale}.json')],
+        ...['--translation-memory-file', tm, '--config', p.dir],
+      ];
+      await assert.rejects(main(), refused);
+    } finally {
+      process.argv = real;
+      process.stderr.write = realErr;
+    }
+
+    assert.equal(fs.readFileSync(tm, 'utf-8'), before);
+    assert.equal(fs.existsSync(p.file('es.json')), false);
   });
 });

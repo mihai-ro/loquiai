@@ -1,42 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { LoquiError } from './errors.js';
 import type { HashStore, LocaleHashes } from './types.js';
 import { readJson, writeJson } from './utils/json.js';
 
 /** What the sidecar file holds: the hashes per locale, and which input wrote which keys. */
 export interface Sidecar {
   locales: LocaleHashes;
-  /** Owner id → the flat keys that input's source had when it last saved. Empty for a v2 sidecar. */
+  /** Owner id → the flat keys that input's source had when it last saved. */
   owners: Record<string, string[]>;
-  /**
-   * The flat map a v2 sidecar held, kept so a locale that has no hashes of its own yet can
-   * still be compared against it, whichever run converted the file.
-   */
-  v2?: HashStore;
 }
 
 /**
- * Reads the sidecar. A v2 sidecar is a single flat store (its values are strings): it
- * never said which locale a hash was for, so it is kept as `v2` and every locale in `to`
- * without a store of its own inherits a copy. Top-level keys starting with `$` are
- * reserved for the file's own bookkeeping and never read as a locale.
+ * Reads the sidecar. A v2 sidecar says nothing about which locale a hash was for, so it is
+ * refused rather than guessed at: `loqui migrate` converts it. The top-level `$owners` key
+ * is the file's own bookkeeping and is never read as a locale.
  */
-export function readSidecar(hashFile: string, to: string[]): Sidecar {
+export function readSidecar(hashFile: string): Sidecar {
   const raw = readJson(hashFile) as Record<string, unknown>;
-  const isV2 = isV2Sidecar(raw);
-  const v2 = isV2 ? (raw as HashStore) : readV2(raw.$v2);
-  const locales = isV2
-    ? {}
-    : (Object.fromEntries(Object.entries(raw).filter(([key]) => !key.startsWith('$'))) as LocaleHashes);
-  if (v2) {
-    for (const locale of to) if (!Object.hasOwn(locales, locale)) locales[locale] = { ...v2 };
+  if (isV2Sidecar(raw)) {
+    throw new LoquiError(
+      'INVALID_CONFIG',
+      `${hashFile} is a v2 hash sidecar, which v3 does not read. Convert it once with \`loqui migrate\`.`,
+    );
   }
-  return { locales, owners: isV2 ? {} : readOwners(raw.$owners), v2 };
-}
-
-function readV2(value: unknown): HashStore | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  return Object.fromEntries(Object.entries(value).filter(([, hash]) => typeof hash === 'string')) as HashStore;
+  const locales = Object.fromEntries(Object.entries(raw).filter(([key]) => !key.startsWith('$'))) as LocaleHashes;
+  return { locales, owners: readOwners(raw.$owners) };
 }
 
 /** A v2 sidecar is one flat map of hashes, so its values are strings where v3 has objects. */
@@ -60,17 +49,13 @@ function readOwners(value: unknown): Record<string, string[]> {
 }
 
 /** The hashes per locale alone, for a reader that has no use for who wrote them. */
-export function loadHashStore(hashFile: string, to: string[]): LocaleHashes {
-  return readSidecar(hashFile, to).locales;
+export function loadHashStore(hashFile: string): LocaleHashes {
+  return readSidecar(hashFile).locales;
 }
 
 export function saveSidecar(hashFile: string, sidecar: Sidecar): void {
   fs.mkdirSync(path.dirname(hashFile), { recursive: true });
-  writeJson(hashFile, {
-    ...sidecar.locales,
-    $owners: sidecar.owners,
-    ...(sidecar.v2 && { $v2: sidecar.v2 }),
-  });
+  writeJson(hashFile, { ...sidecar.locales, $owners: sidecar.owners });
 }
 
 /**

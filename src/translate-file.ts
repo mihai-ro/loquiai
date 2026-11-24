@@ -13,7 +13,7 @@ import {
   resolveTargets,
   sidecarPath,
 } from './project.js';
-import { runObject } from './translate-object.js';
+import { translateObject } from './translate-object.js';
 import { loadTranslationMemory, saveTranslationMemory } from './translation-memory.js';
 import type { LocaleHashes, ObjectRun, TranslateResult, TranslationMemory } from './types.js';
 import { writeFileAtomic } from './utils/json.js';
@@ -52,7 +52,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   // Read only when the run uses it: a corrupt sidecar it never consults must not fail it.
   const useIncremental = options.incremental || Boolean(options.hashFile);
   const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
-  const sidecar: Sidecar = hashFilePath && useIncremental ? readSidecar(hashFilePath, to) : { locales: {}, owners: {} };
+  const sidecar: Sidecar = hashFilePath && useIncremental ? readSidecar(hashFilePath) : { locales: {}, owners: {} };
   const hashStore: LocaleHashes = sidecar.locales;
   // Inputs sharing one sidecar are told apart by their path from it; raw JSON has only its namespace.
   const owner = hashFilePath && inputPath ? ownerId(hashFilePath, inputPath) : namespace;
@@ -60,8 +60,8 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   // load translation memory if enabled
   const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
   const tmFilePath = sidecarPath(inputPath, options.translationMemoryFile, 'tm');
-  const loadedMemory = useTranslationMemory && tmFilePath ? loadTranslationMemory(tmFilePath) : undefined;
-  const translationMemory: TranslationMemory = loadedMemory?.memory ?? {};
+  const translationMemory: TranslationMemory =
+    useTranslationMemory && tmFilePath ? loadTranslationMemory(tmFilePath) : {};
 
   const glossaryModel = buildGlossaryModel(
     config.glossary,
@@ -96,24 +96,20 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
 
   let run: ObjectRun;
   try {
-    run = await runObject(
-      source,
-      {
-        from,
-        to,
-        namespace,
-        config,
-        existing,
-        hashes: useIncremental ? hashStore : undefined,
-        memory: useTranslationMemory ? translationMemory : undefined,
-        glossary: glossaryModel ?? undefined,
-        force: options.force,
-        dryRun: options.dryRun,
-        engine: options.engine,
-        logger: options.logger,
-      },
-      loadedMemory?.warnings,
-    );
+    run = await translateObject(source, {
+      from,
+      to,
+      namespace,
+      config,
+      existing,
+      hashes: useIncremental ? hashStore : undefined,
+      memory: useTranslationMemory ? translationMemory : undefined,
+      glossary: glossaryModel ?? undefined,
+      force: options.force,
+      dryRun: options.dryRun,
+      engine: options.engine,
+      logger: options.logger,
+    });
   } catch (err) {
     // Whatever landed is written before the failure is raised, so a partial run still
     // leaves its output on disk and the next run resumes from the gap. A run that
@@ -182,16 +178,5 @@ function mergeRun(
   }
   const held = new Set(Object.values(locales).flatMap((store) => Object.keys(store)));
   const owned = new Set([...sourceKeys, ...[...ownedBefore].filter((key) => held.has(key))]);
-  // The v2 map is pruned like a locale's store: a key goes only when this input wrote it
-  // and dropped it. Nothing drops the map as a whole.
-  const sourceSet = new Set(sourceKeys);
-  const v2 =
-    sidecar.v2 &&
-    mergeOwnedHashes(
-      sidecar.v2,
-      ownedBefore,
-      ownedByOthers,
-      Object.fromEntries(Object.entries(sidecar.v2).filter(([key]) => sourceSet.has(key))),
-    );
-  return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] }, v2 };
+  return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] } };
 }

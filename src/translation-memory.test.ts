@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
+import { LoquiError } from './errors.js';
 import { hashValue } from './hasher.js';
 import {
   loadTranslationMemory,
@@ -21,47 +22,34 @@ describe('translationMemory', () => {
   });
 
   it('loadTranslationMemory returns empty object when file does not exist', () => {
-    const { memory, warnings } = loadTranslationMemory('/nonexistent/path.json');
-    assert.deepStrictEqual(memory, {});
-    assert.deepStrictEqual(warnings, []);
+    assert.deepStrictEqual(loadTranslationMemory('/nonexistent/path.json'), {});
   });
 
   it('loadTranslationMemory loads existing translation memory', () => {
     const data = { [memoryKey('hello')]: { fr: 'bonjour', de: 'hallo' } };
     fs.writeFileSync(tmPath, JSON.stringify(data, null, 2));
-    const { memory } = loadTranslationMemory(tmPath);
-    assert.deepStrictEqual(memory, data);
+    assert.deepStrictEqual(loadTranslationMemory(tmPath), data);
   });
 
-  it('loadTranslationMemory drops entries in the old key format and returns one warning with the path and count', () => {
-    const kept = memoryKey('hello');
+  it('loadTranslationMemory refuses a file with a key in the v2 format, naming the file and loqui migrate', () => {
     fs.writeFileSync(
       tmPath,
-      JSON.stringify({ [kept]: { fr: 'bonjour' }, '811c9dc5': { fr: 'old one' }, e8d4a2b1: { fr: 'old two' } }),
+      JSON.stringify({
+        [memoryKey('hello')]: { fr: 'bonjour' },
+        '811c9dc5': { fr: 'old one' },
+        e8d4a2b1: { fr: 'old two' },
+      }),
     );
-    const realWrite = process.stderr.write;
-    let wrote = false;
-    process.stderr.write = (() => {
-      wrote = true;
-      return true;
-    }) as typeof process.stderr.write;
-    let loaded: ReturnType<typeof loadTranslationMemory>;
-    try {
-      loaded = loadTranslationMemory(tmPath);
-    } finally {
-      process.stderr.write = realWrite;
-    }
 
-    assert.deepStrictEqual(loaded.memory, { [kept]: { fr: 'bonjour' } });
-    assert.strictEqual(loaded.warnings.length, 1, 'one warning, not one per entry');
-    assert.ok(loaded.warnings[0].includes(tmPath) && loaded.warnings[0].includes('2'), loaded.warnings[0]);
-    assert.strictEqual(wrote, false, 'loading is data in, data out: it prints nothing');
-  });
-
-  it('loadTranslationMemory returns no warning when every key is current', () => {
-    fs.writeFileSync(tmPath, JSON.stringify({ [memoryKey('hello')]: { fr: 'bonjour' } }));
-
-    assert.deepStrictEqual(loadTranslationMemory(tmPath).warnings, []);
+    assert.throws(
+      () => loadTranslationMemory(tmPath),
+      (err: unknown) =>
+        err instanceof LoquiError &&
+        err.code === 'INVALID_CONFIG' &&
+        err.message.includes(tmPath) &&
+        err.message.includes('2 translation-memory entries') &&
+        err.message.includes('loqui migrate'),
+    );
   });
 
   it('memoryKey is 32 lowercase hex characters and stable', () => {
@@ -133,7 +121,6 @@ describe('translationMemory', () => {
   it('load/save roundtrip preserves data', () => {
     const original = { [memoryKey('hello')]: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
     saveTranslationMemory(tmPath, original);
-    const { memory } = loadTranslationMemory(tmPath);
-    assert.deepStrictEqual(memory, original);
+    assert.deepStrictEqual(loadTranslationMemory(tmPath), original);
   });
 });

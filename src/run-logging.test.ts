@@ -218,24 +218,6 @@ describe('the messages a logger receives', () => {
     assert.ok(given.at('debug').some((m) => m.startsWith('[retry] Test 503')));
   });
 
-  test('warnings raised before the run are recorded and logged ahead of its progress', async () => {
-    const given = collector();
-
-    const { stats } = await translateJson({
-      sourceFlat: { a: 'Hello' },
-      from: 'en',
-      to: ['es'],
-      namespace: 'quiet',
-      config,
-      engine: new PartialEngine(['es']),
-      preRunWarnings: ['memory.json: ignored 2 translation-memory entries in the old key format.'],
-      logger: given.log,
-    });
-
-    assert.deepEqual(stats.warnings, ['memory.json: ignored 2 translation-memory entries in the old key format.']);
-    assert.equal(given.entries[0].level, 'warn');
-  });
-
   test('the log it hands back records into the same run', async () => {
     const given = collector();
 

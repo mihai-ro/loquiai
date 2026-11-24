@@ -32,8 +32,6 @@ export interface TranslateJobOptions {
   engine?: EngineAdapter;
   /** where the run's messages go. Required: a site that forgets it would log nowhere. */
   logger: LogFn;
-  /** warnings raised while preparing the run (before any key is sent), logged first. */
-  preRunWarnings?: string[];
 }
 
 export interface TranslateJobResult {
@@ -77,7 +75,6 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     glossaryModel,
     force = false,
     dryRun = false,
-    preRunWarnings = [],
   } = opts;
 
   const stats: RunStats = {
@@ -88,7 +85,6 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     failedChunks: 0,
   };
   const log = createRunLog(stats, opts.logger);
-  for (const w of preRunWarnings) log('warn', w);
   const startTime = Date.now();
 
   const translationMemory = tmOpt ?? {};

@@ -59,9 +59,9 @@ function load(options: InspectOptions) {
  * sidecar was written. Only reads: no log, no file written, no exit code set.
  */
 export function diff(options: InspectOptions): DiffReport {
-  const { inputPath, to, sourceFlat, existing } = load(options);
+  const { inputPath, sourceFlat, existing } = load(options);
   const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
-  const hashStore = hashFilePath ? loadHashStore(hashFilePath, to) : {};
+  const hashStore = hashFilePath ? loadHashStore(hashFilePath) : {};
   return {
     results: diffLocales(sourceFlat, existing, hashStore),
     hasBaseline: Object.values(hashStore).some((store) => Object.keys(store).length > 0),

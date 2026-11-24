@@ -885,26 +885,31 @@ describe('translate — a partial run keeps what it paid for', () => {
     }
   });
 
-  test('a translation-memory entry in the old key format is warned about through the logger', async () => {
+  test('a translation-memory file with a v2 key is refused and left as it is', async () => {
     const dir = nextTmp();
     fs.mkdirSync(dir, { recursive: true });
     const tmFile = path.join(dir, 'tm.json');
     fs.writeFileSync(tmFile, JSON.stringify({ '811c9dc5': { fr: 'old' } }), 'utf-8');
-    const warnings: string[] = [];
+    const before = fs.readFileSync(tmFile, 'utf-8');
 
-    await translate({
-      input: JSON.stringify({ a: 'Hello' }),
-      from: 'en',
-      to: ['fr'],
-      translationMemoryFile: tmFile,
-      engine: makeEngine(),
-      logger: (level, message) => {
-        if (level === 'warn') warnings.push(message);
-      },
-    });
+    await assert.rejects(
+      translate({
+        input: JSON.stringify({ a: 'Hello' }),
+        from: 'en',
+        to: ['fr'],
+        output: path.join(dir, '{locale}.json'),
+        translationMemoryFile: tmFile,
+        engine: makeEngine(),
+      }),
+      (err: unknown) =>
+        err instanceof LoquiError &&
+        err.code === 'INVALID_CONFIG' &&
+        err.message.includes(tmFile) &&
+        err.message.includes('loqui migrate'),
+    );
 
-    assert.equal(warnings.length, 1);
-    assert.ok(warnings[0].includes(tmFile), warnings[0]);
+    assert.equal(fs.readFileSync(tmFile, 'utf-8'), before);
+    assert.equal(fs.existsSync(path.join(dir, 'fr.json')), false);
   });
 
   test('says the output was written when there is an output path', async () => {
@@ -1412,66 +1417,6 @@ describe('translate — the hash sidecar is kept per locale', () => {
     assert.equal(p.read('es').greeting, 'HELLO THERE');
   });
 
-  test('a v2 flat sidecar applies to every locale, costs nothing, and is rewritten per locale', async () => {
-    const p = project();
-    await p.run(['es', 'pt']);
-    const flat = { greeting: hashValue('hello') };
-    fs.writeFileSync(p.hashFile, JSON.stringify(flat));
-    const before = p.calls();
-
-    await p.run(['es', 'pt']);
-
-    assert.equal(p.calls() - before, 0);
-    const { $owners: _owners, $v2: _v2, ...locales } = p.sidecar();
-    assert.deepEqual(locales, { es: flat, pt: flat });
-  });
-
-  test('a v2 flat sidecar is not expanded to locales outside `to`', async () => {
-    const p = project();
-    await p.run(['es']);
-    fs.writeFileSync(p.hashFile, JSON.stringify({ greeting: hashValue('hello') }));
-
-    await p.run(['es']);
-
-    assert.deepEqual(
-      Object.keys(p.sidecar()).filter((key) => !key.startsWith('$')),
-      ['es'],
-    );
-  });
-
-  test('a v2 sidecar converted by a partial run still covers the other locales', async () => {
-    const p = project();
-    await p.run(['es', 'pt']);
-    fs.writeFileSync(p.hashFile, JSON.stringify({ greeting: hashValue('hello') }));
-    p.edit({ greeting: 'hello there' });
-
-    await p.run(['es']);
-    assert.deepEqual(Object.keys(p.sidecar()).sort(), ['$owners', '$v2', 'es']);
-
-    const { results } = diff({ input: p.source, to: ['pt'], output: p.out, hashFile: p.hashFile });
-    assert.deepEqual(results[0].changed, ['greeting']);
-
-    const before = p.calls();
-    await p.run(['pt']);
-
-    assert.equal(p.calls() - before, 1);
-    assert.equal(p.read('pt').greeting, 'HELLO THERE');
-  });
-
-  test('the $v2 map drops a key this input wrote and the source no longer has', async () => {
-    const p = project();
-    await p.run(['es']);
-    const stale = { greeting: hashValue('hello'), gone: 'deadbeef' };
-    fs.writeFileSync(
-      p.hashFile,
-      JSON.stringify({ es: stale, $v2: stale, $owners: { 'en.json': ['greeting', 'gone'] } }),
-    );
-
-    await p.run(['es']);
-
-    assert.deepEqual(Object.keys(p.sidecar().$v2), ['greeting']);
-  });
-
   test('diff() reports a key as changed for the locale that was not re-delivered', async () => {
     const p = project();
     await p.run(['es', 'pt']);
@@ -1486,24 +1431,17 @@ describe('translate — the hash sidecar is kept per locale', () => {
     assert.deepEqual(byLocale.es.changed, []);
   });
 
-  test('diff() reads a v2 flat sidecar for every locale', async () => {
+  test('a v2 flat sidecar is refused by translate() and diff(), naming loqui migrate', async () => {
     const p = project();
-    await p.run(['es', 'pt']);
-    fs.writeFileSync(p.hashFile, JSON.stringify({ greeting: hashValue('older') }));
+    await p.run(['es']);
+    fs.writeFileSync(p.hashFile, JSON.stringify({ greeting: hashValue('hello') }));
+    fs.rmSync(path.join(p.dir, 'es.json'));
+    const refused = (err: unknown) =>
+      err instanceof LoquiError && err.code === 'INVALID_CONFIG' && err.message.includes('loqui migrate');
 
-    const { results, hasBaseline } = diff({
-      input: p.source,
-
-      to: ['es', 'pt'],
-      output: p.out,
-      hashFile: p.hashFile,
-    });
-
-    assert.equal(hasBaseline, true);
-    assert.deepEqual(
-      results.map((r) => r.changed),
-      [['greeting'], ['greeting']],
-    );
+    await assert.rejects(p.run(['es']), refused);
+    assert.equal(fs.existsSync(path.join(p.dir, 'es.json')), false, 'a refused run writes nothing');
+    assert.throws(() => diff({ input: p.source, to: ['es'], output: p.out, hashFile: p.hashFile }), refused);
   });
 
   test('a dry run does not touch the sidecar', async () => {
@@ -1597,23 +1535,6 @@ describe('translate — inputs sharing one hash sidecar', () => {
     const { es, $owners } = p.sidecar();
     assert.deepEqual(Object.keys(es).sort(), ['k1', 'k2']);
     assert.deepEqual($owners, { 'a.json': ['k1'], 'b.json': ['k2'] });
-  });
-
-  test('a v2 sidecar shared by two inputs keeps the other input hashes for a later locale', async () => {
-    const p = shared();
-    p.write('a', { k1: 'one' });
-    p.write('b', { k2: 'two' });
-    await p.run('a', ['es', 'pt']);
-    await p.run('b', ['es', 'pt']);
-    fs.writeFileSync(p.hashFile, JSON.stringify({ k1: hashValue('one'), k2: hashValue('two') }), 'utf-8');
-
-    p.write('b', { k2: 'two edited' });
-    await p.run('a', ['es']);
-    p.reset();
-    await p.run('b', ['pt']);
-
-    assert.equal(p.calls(), 1);
-    assert.deepEqual(p.target('b', 'pt'), { k2: 'pt:two edited' });
   });
 
   test('a sidecar with no owner list keeps the keys the source lacks', async () => {

@@ -49,21 +49,7 @@ export interface TranslateObjectOptions {
  * Rejects with a `LoquiError` carrying `result` when chunks failed, holding everything
  * that landed. An error raised before anything is sent carries none.
  */
-export function translateObject(source: JsonObject, options: TranslateObjectOptions): Promise<ObjectRun> {
-  return runObject(source, options);
-}
-
-/**
- * `translateObject` for the file layer, which has warnings of its own from preparing the
- * run (an old-format memory file). They go through the run's log, the only writer of
- * `stats.warnings`, so they are recorded and logged ahead of its progress. Not exported
- * from the package: an in-memory caller prepares nothing.
- */
-export async function runObject(
-  source: JsonObject,
-  options: TranslateObjectOptions,
-  preRunWarnings?: string[],
-): Promise<ObjectRun> {
+export async function translateObject(source: JsonObject, options: TranslateObjectOptions): Promise<ObjectRun> {
   const config: LoquiConfig = { ...CONFIG_DEFAULTS, ...options.config };
   validateConfig(config, 'config');
   validateTargets(options.to);
@@ -88,7 +74,6 @@ export async function runObject(
     force: options.force,
     dryRun: options.dryRun,
     engine: options.engine,
-    preRunWarnings,
     logger: options.logger ?? (() => {}),
   });
 

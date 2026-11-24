@@ -38,6 +38,37 @@ interface ProcessChunkOptions {
   glossaryModel?: GlossaryModel;
 }
 
+const SENTINEL = /⟦[^⟦⟧]*⟧/g;
+
+function countSentinels(text: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const [token] of text.matchAll(SENTINEL)) counts.set(token, (counts.get(token) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * What is wrong with the sentinels in a model's answer, or null when they match what was sent:
+ * every sent one back exactly as often, and no other.
+ */
+function describePlaceholderFault(sent: string, answer: string, map: Record<string, string>): string | null {
+  const sentCounts = countSentinels(sent);
+  const answerCounts = countSentinels(answer);
+  const original = (token: string): string =>
+    Object.hasOwn(map, token) ? restorePlaceholders(map[token], map) : token;
+  const list = (tokens: string[]): string => [...new Set(tokens.map(original))].join(', ');
+
+  const missing = [...sentCounts.keys()].filter((token) => !answerCounts.has(token));
+  const repeated = [...sentCounts].filter(([token, n]) => answerCounts.has(token) && answerCounts.get(token) !== n);
+  const unsent = [...answerCounts.keys()].filter((token) => !sentCounts.has(token));
+
+  const faults: string[] = [];
+  if (missing.length > 0) faults.push(`is missing placeholders: ${list(missing)}`);
+  if (repeated.length > 0)
+    faults.push(`has placeholders a different number of times than sent: ${list(repeated.map(([t]) => t))}`);
+  if (unsent.length > 0) faults.push(`has placeholders that were never sent: ${list(unsent)}`);
+  return faults.length > 0 ? faults.join('; ') : null;
+}
+
 // Translations more than 4× the source length are almost certainly hallucinations.
 const MAX_EXPANSION_RATIO = 4;
 
@@ -102,14 +133,14 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
 
         // Checked on the model's answer, before restore: a sentinel nested inside another
         // (a term or placeholder inside a tag) only exists in the map, never in the restored text.
-        // Only sentinels that were actually sent are required; nested ones ride along with their outer one.
-        const missing = Object.keys(map)
-          .filter((s) => sent.keys[key].includes(s) && !masked.includes(s))
-          .map((s) => restorePlaceholders(map[s], map));
-        if (missing.length > 0) {
+        // The sentinels that count are the ones actually sent; nested ones ride along with their outer one.
+        // Each must come back as often as it went out, and nothing else may look like one. Their
+        // order is the translation's to change: `{name}` and `{count}` legitimately swap places.
+        const fault = describePlaceholderFault(sent.keys[key], masked, map);
+        if (fault) {
           log.warning({
             code: 'PLACEHOLDER_MISMATCH',
-            message: `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${[...new Set(missing)].join(', ')} — skipped, will retry on next run`,
+            message: `[${namespace}→${locale}] Key "${key}" ${fault} — skipped, will retry on next run`,
             locale,
             key,
           });
@@ -236,6 +267,12 @@ function maskChunk(
   const maskedKeys: FlatTranslations = {};
   const maskMaps: Record<string, Record<string, string>> = {};
   for (const [key, value] of Object.entries(chunk.keys)) {
+    // The sentinel characters are loqui's own: a value that holds them cannot be told from a
+    // masked one, so it is not sent rather than escaped.
+    if (value.includes('⟦') || value.includes('⟧')) {
+      onSkipped(key, 'the value contains ⟦ or ⟧, which loqui uses for its own placeholder markers');
+      continue;
+    }
     // 1) mask do-not-translate terms first (T-prefix range: ⟦T0⟧, ⟦T1⟧…)
     const termMask = maskTerms(value, noTranslate, 0);
     // 2) mask placeholders on the already-term-masked string (⟦0⟧, ⟦1⟧…)

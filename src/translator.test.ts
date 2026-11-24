@@ -35,6 +35,81 @@ function makeEngine(transform: (v: string) => string = (v) => v.toUpperCase()): 
 }
 
 describe('translateJson — placeholder validation', () => {
+  const greet = { greet: 'Hi {name}, you have {count}' };
+  const run = (transform: (v: string) => string, sourceFlat: Record<string, string> = greet) =>
+    translateJson({
+      logger: silent,
+      sourceFlat,
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine: makeEngine(transform),
+    });
+
+  test('rejects an answer with a sentinel that was never sent', async () => {
+    const { translations, stats } = await run((v) => `${v}⟦7⟧`);
+
+    assert.equal(translations.es.greet, undefined);
+    assert.deepEqual(
+      stats.warnings.map((w) => w.code),
+      ['PLACEHOLDER_MISMATCH'],
+    );
+    assert.match(stats.warnings[0].message, /never sent: ⟦7⟧/);
+  });
+
+  test('rejects an answer that repeats a sent sentinel', async () => {
+    const { translations, stats } = await run((v) => v.replace('⟦0⟧', '⟦0⟧⟦0⟧'));
+
+    assert.equal(translations.es.greet, undefined);
+    assert.deepEqual(
+      stats.warnings.map((w) => w.code),
+      ['PLACEHOLDER_MISMATCH'],
+    );
+    assert.match(stats.warnings[0].message, /different number of times than sent: \{name\}/);
+  });
+
+  test('accepts placeholders that moved, since a translation may reorder them', async () => {
+    const { translations, stats } = await run((v) => v.replace('⟦0⟧', '@@').replace('⟦1⟧', '⟦0⟧').replace('@@', '⟦1⟧'));
+
+    assert.equal(translations.es.greet, 'Hi {count}, you have {name}');
+    assert.deepEqual(stats.warnings, []);
+  });
+
+  test('does not send a value that already holds a sentinel character, and still translates its neighbours', async () => {
+    const sent: string[] = [];
+    const engine: EngineAdapter = {
+      async translateChunk({ chunk, targetLocales }) {
+        sent.push(...Object.keys(chunk.keys));
+        return Object.fromEntries(
+          targetLocales.map((locale) => [
+            locale,
+            { keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, v.toUpperCase()])) },
+          ]),
+        );
+      },
+    };
+
+    const { translations, stats } = await translateJson({
+      logger: silent,
+      sourceFlat: { bad: 'Use ⟦0⟧ then {name}', good: 'Hello' },
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine,
+    });
+
+    assert.deepEqual(sent, ['good']);
+    assert.equal(translations.es.good, 'HELLO');
+    assert.equal(translations.es.bad, undefined);
+    assert.deepEqual(
+      stats.warnings.map(({ code, key }) => ({ code, key })),
+      [{ code: 'NOT_SENT', key: 'bad' }],
+    );
+    assert.match(stats.warnings[0].message, /⟦ or ⟧/);
+  });
+
   test('skips a translation where the LLM dropped a placeholder token', async () => {
     // Engine simulates an LLM that strips ⟦1⟧ to just "1"
     const engine: EngineAdapter = {

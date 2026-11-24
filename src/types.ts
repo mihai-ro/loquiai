@@ -121,7 +121,10 @@ export interface GlossaryModel {
   noTranslate: string[];
 }
 
-/** What a warning is about, so a caller can act on it without matching message text. */
+/**
+ * What a warning is about, so a caller can act on it without matching message text. A minor
+ * release may add codes, so an exhaustive `switch` needs a `default` case.
+ */
 export type RunWarningCode =
   | 'PLACEHOLDER_MISMATCH'
   | 'MISSING_GLOSSARY_TERM'
@@ -195,9 +198,8 @@ export interface ObjectRun extends TranslationRun {
   hashes: LocaleHashes;
   memory: TranslationMemory;
   /**
-   * Per locale, the keys this run turned down: a broken placeholder, a lost glossary term, or
-   * a key it could not send. A key that is turned down on every run is one a caller may stop
-   * retrying: pass it back as `capped`.
+   * Per locale, the keys whose answer this run turned down. The locale still owes them, and a
+   * caller can count them to cap retries: pass the ones to stop sending back as `capped`.
    */
   rejected: Record<string, string[]>;
 }

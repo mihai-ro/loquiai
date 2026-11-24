@@ -1,5 +1,6 @@
 import type { LocaleHashes, TranslationMemory, TranslationRun } from './types.js';
 
+/** A minor release may add codes, so an exhaustive `switch` needs a `default` case. */
 export type LoquiErrorCode =
   | 'AUTH'
   | 'RATE_LIMIT'

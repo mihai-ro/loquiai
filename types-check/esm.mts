@@ -4,6 +4,7 @@ import {
   BaseEngine,
   type DiffReport,
   type EngineAdapter,
+  type FailedRunResult,
   type DiffResult,
   diff,
   type InspectOptions,
@@ -15,6 +16,7 @@ import {
   type RunWarning,
   type RunWarningCode,
   stderrLogger,
+  type SupportedModel,
   type TranslateChunkRequest,
   type TranslationRun,
   translate,
@@ -31,6 +33,8 @@ const changes: DiffResult[] = report.results;
 const checks: ValidationResult[] = validate(inspect);
 const logger: LogFn = stderrLogger;
 const result: TranslationRun | undefined = new LoquiError('CHUNK_FAILED', 'x').result;
+const failed: FailedRunResult | undefined = new LoquiError('CHUNK_FAILED', 'x').result;
+const model: SupportedModel = 'claude-sonnet-4-6';
 
 // A custom engine, plain and as a BaseEngine subclass: both take the request object.
 const engine: EngineAdapter = {
@@ -70,4 +74,4 @@ import type {} from '@mihairo/loqui/cli';
 const code: RunWarningCode = 'PLACEHOLDER_MISMATCH';
 const warning: RunWarning = { code, message: 'x', locale: 'es', key: 'a' };
 
-export { changes, checks, core, engine, logger, notAString, result, run, SubclassEngine, warning };
+export { changes, checks, core, engine, failed, logger, model, notAString, result, run, SubclassEngine, warning };

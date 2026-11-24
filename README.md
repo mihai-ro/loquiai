@@ -152,7 +152,7 @@ instead. Pass several locales as `--to es,de`.
 | 9    | `INVALID_CONFIG`   | `.loqui.json` is missing required fields or has invalid values   |
 | 10   | `TRUNCATED`        | The engine hit its output token limit mid-response               |
 | 11   | `INVALID_USAGE`    | Invalid command-line usage                                       |
-| 12   | `VALIDATION_FAILED`| `--validate` found missing or extra keys, or a locale with no file |
+| 12   | `VALIDATION_FAILED`| `--validate` found missing or extra keys, keys held back by the retry cap, or a locale with no file |
 | 13   | `INPUT_NOT_FOUND`  | The input file does not exist                                    |
 
 When every chunk fails the same non-retryable way, that code is reported rather than
@@ -268,13 +268,13 @@ const { results, hasBaseline } = diff(options);
 // hasBaseline is false when there is no hash sidecar: nothing can be reported as changed
 
 const checks = validate(options);
-const broken = checks.filter((r) => r.missing.length > 0 || r.extra.length > 0);
+const broken = checks.filter((r) => r.missing.length > 0 || r.extra.length > 0 || r.capped.length > 0);
 if (broken.length > 0) process.exitCode = 1; // yours to decide
 ```
 
 `InspectOptions` are `input`, `to`, `output` (the target files to inspect), `hashFile`,
 `config` and `configPath`. A locale without a target file comes back with `fileMissing: true` and
-every key under `missing`; an `output` record without a path for a target locale is rejected.
+every key under `missing`. `capped` lists the keys the retry cap (`RETRY_CAP`) holds back: they keep an old translation, so the files look complete, but the source never got translated. `validate()` reads the hash sidecar for it, and `capped` is empty without one. An `output` record without a path for a target locale is rejected.
 `translate()` rejects a call that still passes `diff` or `validate` with `INVALID_CONFIG`,
 before it reads a file or calls an engine.
 
@@ -325,6 +325,8 @@ Options: `from`, `to`, `config` (merged over the defaults and validated), `exist
 (resolved terms and a do-not-translate list), `namespace`, `force`, `dryRun`, `engine`
 and `logger`. It resolves with an `ObjectRun`: a `TranslationRun` (`locales`, `stats`,
 `removed`) plus the updated `hashes` and `memory`.
+
+With no `engine` and no `config.engine`, `translateObject()` uses Gemini and reads `GEMINI_API_KEY`.
 
 ### Errors
 
@@ -382,6 +384,9 @@ try {
 | a key turned down on every run is re-sent on every run | held back after three runs in a row with `RETRY_CAP`, until its source changes |
 | translation memory holds one translation per source string | one per source string and parent path |
 | `LoquiConfig.model` is always set, `gemini-2.5-flash` by default, whatever the engine | optional; when unset, each engine uses its own default model |
+| numbers and booleans are written to a target as strings | they keep their JSON type; a target's own value is kept when its type matches the source's (`rtl`, `firstDay`), otherwise the source's is used |
+| translation memory is keyed without the source locale | keyed with it, so an `en` "Gift" is not served for a `de` one; `loqui migrate` needs `--from`, or a `from` in the config |
+| `--validate` passes when every key is in the target files | also fails (exit `12`) for a key the retry cap holds back: it keeps an old translation, and `validate()` lists it under `capped` |
 
 ---
 
@@ -413,6 +418,8 @@ for (const ns of namespaces) {
   });
 }
 ```
+
+Each namespace has its own sidecar here. Several namespaces in one process may share one `hashFile`, but run no two processes that share it.
 
 ---
 
@@ -474,6 +481,10 @@ the other keys are still translated.
 
 Inside an ICU plural or select block only the structure is protected: the variable, the
 selectors, the braces and `#`. The text of each branch is translated.
+
+The branches are the source's: a block keeps the plural categories it has. A target locale that
+needs `few` or `many` (Russian, Polish, Ukrainian, Czech, Arabic) gets only the source's `one` and
+`other`, so review those locales by hand.
 
 A value that already contains `⟦` or `⟧` is not sent, because loqui uses those characters
 for its own placeholder markers. A `NOT_SENT` warning names it.
@@ -546,7 +557,7 @@ glossary/
 
 The `--translation-memory` flag (formerly `--glossary`) caches whole-string translations by content hash. It is orthogonal to the terminology glossary — both can be active at the same time.
 
-Memory is keyed by the source string and its parent path, so `buttons.save` and `menu.save` can hold different translations, while siblings under one parent share one. When a run is saved, an entry its input no longer uses is pruned, unless another input sharing the memory file still uses it. A memory file in the v2 format is refused: convert it once with `loqui migrate`.
+Memory is keyed by the source locale, the source string and its parent path, so an `en` "Gift" is never served for a `de` one, and `buttons.save` and `menu.save` can hold different translations, while siblings under one parent share one. When a run is saved, an entry its input no longer uses is pruned, unless another input sharing the memory file still uses it. A memory file in the v2 format is refused: convert it once with `loqui migrate`.
 
 `--force` ignores the memory and overwrites it: every key goes to the engine, and the new translations replace what the memory held.
 
@@ -569,7 +580,7 @@ loqui --input en.json --to es,de --output ./i18n/{locale}.json --validate
 `--diff` reports **changed** by comparing the current source against the hashes
 recorded by a previous run, so it needs the hash sidecar. Without one it says so and
 reports nothing as changed — there is no record of what the source used to be.
-`--validate` exits `12` (`VALIDATION_FAILED`) when a target locale has missing or extra keys, or no file at all.
+`--validate` exits `12` (`VALIDATION_FAILED`) when a target locale has missing or extra keys, or no file at all, or when the retry cap holds a key back (it prints it as `capped`). A capped key is listed until its source changes or a `--force` run translates it.
 
 ---
 
@@ -587,17 +598,21 @@ pruned, so the sidecar tracks the source rather than growing forever.
 Several inputs can share one `--hash-file`. Each input prunes only the keys it wrote,
 so the others' entries survive.
 
+Inputs in one process may share a `--hash-file` and a translation-memory file, even when they run at the same time. Separate processes must not share them at the same time: nothing locks the files, so the last one to save wins.
+
+Changing the glossary, `context`, the prompts or the model does not invalidate what is already translated, because the sidecar records the source text only. Run with `--force` to translate everything again. Translation memory can also serve a translation made before a glossary term existed.
+
 The sidecar also counts, under `$attempts`, how many runs in a row each key was turned down; that count is what holds a key back with `RETRY_CAP`.
 
 v3 refuses a v2 sidecar (one flat map of hashes). Convert it once, naming every target
 locale and every input that shares it:
 
 ```sh
-loqui migrate --to es,pt,de --input common.json --input admin.json --hash-file .cache/hashes.json
+loqui migrate --from en --to es,pt,de --input common.json --input admin.json --hash-file .cache/hashes.json
 ```
 
 The same run moves translation-memory entries to v3 keys, in the memory file next to each
-input or in the one `--translation-memory-file` names. An entry whose source string is in
+input or in the one `--translation-memory-file` names. `--from` (or `from` in the config) is required: a v3 memory key includes the source locale, which v2 entries did not record, so they are keyed to the one you name. An entry whose source string is in
 none of the inputs is dropped, and one whose string sits under several parent paths is copied to each.
 
 ```sh

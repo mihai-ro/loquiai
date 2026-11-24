@@ -12,6 +12,7 @@ import type {
   RunStats,
   RunWarning,
   RunWarningCode,
+  SupportedModel,
   TranslateChunkRequest,
   TranslateResult,
   TranslationChunk,
@@ -24,7 +25,7 @@ import type { LogFn } from './utils/logger.js';
 export type { DiffResult } from './diff.js';
 export { BaseEngine } from './engines/base.engine.js';
 export { createEngine } from './engines/factory.js';
-export type { LoquiErrorCode } from './errors.js';
+export type { FailedRunResult, LoquiErrorCode } from './errors.js';
 export { LoquiError } from './errors.js';
 export type { DiffReport, InspectOptions } from './inspect.js';
 export { diff, validate } from './inspect.js';
@@ -46,6 +47,7 @@ export type {
   RunStats,
   RunWarning,
   RunWarningCode,
+  SupportedModel,
   TranslateChunkRequest,
   TranslateResult,
   TranslationChunk,
@@ -108,7 +110,7 @@ export interface TranslateOptions {
 }
 
 /**
- * Translate a JSON file or string into one or more target locales.
+ * Translate a JSON file, given by its path, into one or more target locales.
  *
  * @param options - Translation options. `input`, `from`, and `to` are required
  *   (either directly or via a loaded config file).

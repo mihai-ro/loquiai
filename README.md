@@ -150,11 +150,13 @@ instead. Pass several locales as `--to es,de`.
 | 4    | `TIMEOUT`          | Request timed out                                                |
 | 5    | `NETWORK_ERROR`    | Network failure after retries                                    |
 | 6    | `INVALID_RESPONSE` | API returned an unexpected response                              |
-| 7    | `PARSE_ERROR`      | A response, the input, or a file on disk is not valid JSON       |
+| 7    | `PARSE_ERROR`      | A response, the input, or a file on disk is not valid JSON or not a JSON object |
 | 8    | `CHUNK_FAILED`     | Some chunks failed — see [Partial runs](#partial-runs)           |
 | 9    | `INVALID_CONFIG`   | `.loqui.json` is missing required fields or has invalid values   |
 | 10   | `TRUNCATED`        | The engine hit its output token limit mid-response               |
 | 11   | `INVALID_USAGE`    | Invalid command-line usage                                       |
+| 12   | `VALIDATION_FAILED`| `--validate` found missing or extra keys, or a locale with no file |
+| 13   | `INPUT_NOT_FOUND`  | The input file does not exist                                    |
 
 When every chunk fails the same non-retryable way, that code is reported rather than
 `CHUNK_FAILED` — a bad API key exits `2`, so a caller can tell "fix your key" from
@@ -298,6 +300,10 @@ interface TranslateResult {
 }
 ```
 
+`stats.warnings` lists what went wrong, as `{ code, message, locale?, key? }`. A key with
+`PLACEHOLDER_MISMATCH`, `MISSING_GLOSSARY_TERM` or `EMPTY_TRANSLATION` was not written and
+is retried on the next run. Filter on `code`, not on the message text.
+
 Documents are objects. Serialise them yourself with `JSON.stringify(doc, null, 2)` when
 you need text. If `output` is specified, files are written to disk and the same
 result is still returned.
@@ -375,6 +381,10 @@ try {
 | CLI: `--diff` / `--validate` report on stderr               | on stdout                                            |
 | CLI: `--validate` without `--output` warns and exits `0`   | exits `11` (`INVALID_USAGE`)                         |
 | `validate()` leaves out a locale with no target file        | reports it with `fileMissing: true`, every key missing |
+| `stats.warnings: string[]`                                  | `{ code, message, locale?, key? }[]`                 |
+| CLI: `--validate` mismatch exits `1`                         | exits `12` (`VALIDATION_FAILED`)                     |
+| a missing input file is a plain `ENOENT` error              | `LoquiError` `INPUT_NOT_FOUND`, exit `13`            |
+| ICU plural/select branch text is left untranslated          | translated; only the ICU structure is protected      |
 
 ---
 
@@ -464,6 +474,12 @@ Tokens that must not be translated are automatically masked before the LLM call 
 
 A value whose ICU block is never closed is skipped with a warning that names the key;
 the other keys are still translated.
+
+Inside an ICU plural or select block only the structure is protected: the variable, the
+selectors, the braces and `#`. The text of each branch is translated.
+
+A value that already contains `⟦` or `⟧` is not sent, because loqui uses those characters
+for its own placeholder markers. A `NOT_SENT` warning names it.
 
 ### Custom patterns
 
@@ -556,7 +572,7 @@ loqui --input en.json --to es,de --output ./i18n/{locale}.json --validate
 `--diff` reports **changed** by comparing the current source against the hashes
 recorded by a previous run, so it needs the hash sidecar. Without one it says so and
 reports nothing as changed — there is no record of what the source used to be.
-`--validate` exits `1` when a target locale has missing or extra keys, or no file at all.
+`--validate` exits `12` (`VALIDATION_FAILED`) when a target locale has missing or extra keys, or no file at all.
 
 ---
 
@@ -713,7 +729,7 @@ await translate({
 | `chunk(s) failed` (exit 8) | Some chunks failed after retries | With an output path, the rest was already written — re-run to retry only the gap. Without one, nothing was saved |
 | `Could not parse <file> as JSON` (exit 7) | A target file, hash sidecar, translation-memory file or glossary file is not valid JSON, for example a merge-conflict marker | loqui stops and leaves the file alone — fix or delete it, then re-run |
 | `unexpected argument: …` or `… needs a value` (exit 11) | An extra positional argument, as in `--to es de`, or a value flag followed by another flag | Pass locales as `--to es,de`; give the flag its value, or write it as `--flag=value` |
-| `was not sent for translation` | A source string has an ICU plural/select block that is never closed | Fix the braces in the source string; the other keys are still translated |
+| `was not sent for translation` | A source string has a malformed or unclosed ICU block, or contains `⟦` or `⟧` | Fix the braces, or remove the `⟦` `⟧` characters; the other keys are still translated |
 | `returned a body that is not JSON` (exit 6) | A proxy or gateway answered in place of the API | Check any proxy or gateway between you and the API, then re-run |
 | `--diff` reports nothing as changed | No hash sidecar yet | Run once with `--incremental` to start recording source hashes |
 

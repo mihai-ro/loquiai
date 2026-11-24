@@ -41,6 +41,7 @@
     "test:coverage": "tsc -p tsconfig.test.json && c8 --check-coverage node --test .dist-test/*.test.js .dist-test/engines/*.test.js .dist-test/utils/*.test.js",
     "check:types": "tsc -p types-check/tsconfig.json",
     "bench": "tsc -p tsconfig.test.json && node scripts/bench.mjs",
+    "smoke": "node scripts/smoke.mjs",
     "test:watch": "node --test --watch .dist-test/*.test.js .dist-test/engines/*.test.js .dist-test/utils/*.test.js",
     "clean": "rm -rf dist",
     "lint": "biome check src/",

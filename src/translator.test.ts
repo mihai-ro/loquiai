@@ -89,6 +89,52 @@ describe('translateJson — placeholder validation', () => {
     assert.ok(translations.fr.desc?.includes('${name}'));
     assert.equal(stats.warnings.filter((w) => w.includes('missing placeholders')).length, 0);
   });
+
+  test('accepts a tag that contains a noTranslate term', async () => {
+    const { translations, stats } = await translateJson({
+      logger: silent,
+      sourceFlat: { help: 'Contact <a href="mailto:help@schedulepop.com">SchedulePop Support</a>.' },
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine: makeEngine((v) => v.replace('Contact', 'Contacta').replace('Support', 'Soporte')),
+      glossaryModel: { terms: {}, noTranslate: ['SchedulePop'] },
+    });
+
+    assert.deepEqual(stats.warnings, []);
+    assert.equal(translations.es.help, 'Contacta <a href="mailto:help@schedulepop.com">SchedulePop Soporte</a>.');
+  });
+
+  test('accepts a tag that contains a placeholder', async () => {
+    const { translations, stats } = await translateJson({
+      logger: silent,
+      sourceFlat: { help: 'Contact <a href="mailto:{{email}}">us</a>.' },
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine: makeEngine((v) => v.replace('Contact', 'Contacta').replace('us', 'nos')),
+    });
+
+    assert.deepEqual(stats.warnings, []);
+    assert.equal(translations.es.help, 'Contacta <a href="mailto:{{email}}">nos</a>.');
+  });
+
+  test('still rejects a dropped tag that contains nothing masked', async () => {
+    const { translations, stats } = await translateJson({
+      logger: silent,
+      sourceFlat: { bold: 'Say <b>x</b>' },
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine: makeEngine((v) => v.replace('Say', 'Di').replace('⟦0⟧', '')),
+    });
+
+    assert.equal(translations.es.bold, undefined);
+    assert.ok(stats.warnings.some((w) => w.includes('missing placeholders: <b>')));
+  });
 });
 
 describe('translateJson — hash generation', () => {

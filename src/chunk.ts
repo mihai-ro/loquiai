@@ -80,12 +80,13 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
       const localeResult = results[locale];
       if (!localeResult) continue;
 
-      const restored = restoreChunk(localeResult.keys, maskMaps);
-
-      for (const [key, value] of Object.entries(restored)) {
+      for (const [key, masked] of Object.entries(localeResult.keys)) {
         // A custom engine can answer with more than it was sent. Only what was asked for
         // may land: anything else would overwrite a value this run never meant to touch.
         if (!Object.hasOwn(sent.keys, key)) continue;
+
+        const map = maskMaps[key] ?? {};
+        const value = restorePlaceholders(masked, map);
 
         if (!value.trim()) {
           const w = `[${namespace}→${locale}] Empty translation for key: "${key}"`;
@@ -93,11 +94,14 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
           continue;
         }
 
-        // Re-use the mask map already computed in maskChunk — avoids re-running all placeholder regexes.
-        const originalTokens = Object.values(maskMaps[key] ?? {});
-        const missing = [...new Set(originalTokens)].filter((t) => !value.includes(t));
+        // Checked on the model's answer, before restore: a sentinel nested inside another
+        // (a term or placeholder inside a tag) only exists in the map, never in the restored text.
+        // Only sentinels that were actually sent are required; nested ones ride along with their outer one.
+        const missing = Object.keys(map)
+          .filter((s) => sent.keys[key].includes(s) && !masked.includes(s))
+          .map((s) => restorePlaceholders(map[s], map));
         if (missing.length > 0) {
-          const w = `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${missing.join(', ')} — skipped, will retry on next run`;
+          const w = `[${namespace}→${locale}] Key "${key}" is missing placeholders: ${[...new Set(missing)].join(', ')} — skipped, will retry on next run`;
           log('warn', w);
           continue;
         }
@@ -223,17 +227,6 @@ function maskChunk(
     }
   }
   return { maskedChunk: { keys: maskedKeys }, maskMaps, skipped };
-}
-
-function restoreChunk(
-  translatedKeys: FlatTranslations,
-  maskMaps: Record<string, Record<string, string>>,
-): FlatTranslations {
-  const restored: FlatTranslations = {};
-  for (const [key, value] of Object.entries(translatedKeys)) {
-    restored[key] = restorePlaceholders(value, maskMaps[key] ?? {});
-  }
-  return restored;
 }
 
 // Exported for unit testing.

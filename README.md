@@ -77,21 +77,21 @@ loqui --input en.json --output ./i18n/{locale}.json --incremental
 
 All fields are optional. CLI flags always override the config file.
 
-| Field                 | Type                                | Default            | Description                          |
-| --------------------- | ----------------------------------- | ------------------ | ------------------------------------ |
-| `engine`              | `gemini` \| `openai` \| `anthropic` | `gemini`           | LLM provider                         |
-| `model`               | string                              | `gemini-2.5-flash` | Model name (any string)              |
-| `from`                | string                              | —                  | Source locale (e.g. `en`)            |
-| `to`                  | string[]                            | —                  | Target locales (e.g. `["es","de"]`)  |
-| `temperature`         | 0–2                                 | `0.1`              | Sampling temperature                 |
-| `topP`                | 0–1                                 | `1`                | Nucleus sampling                     |
-| `concurrency`         | 1–32                                | `8`                | Parallel API requests                |
-| `splitToken`          | 500–32000                           | `4000`             | Max tokens per chunk                 |
-| `context`             | string                              | —                  | Domain context injected into prompts |
-| `prompts`             | `{ system?, user? }`                | —                  | Custom prompt templates              |
-| `placeholderPatterns` | string[]                            | —                  | Extra regex patterns to protect      |
-| `timeout`             | number (ms)                         | `120000`           | Per-request timeout                  |
-| `review`              | boolean                             | `false`            | Second review pass (2× API calls)    |
+| Field                 | Type                                | Default                                                       | Description                          |
+| --------------------- | ----------------------------------- | ------------------------------------------------------------- | ------------------------------------ |
+| `engine`              | `gemini` \| `openai` \| `anthropic` | `gemini`                                                      | LLM provider                         |
+| `model`               | string                              | per engine: `gemini-2.5-flash`, `gpt-4o`, `claude-sonnet-4-6` | Model name (any string)              |
+| `from`                | string                              | —                                                             | Source locale (e.g. `en`)            |
+| `to`                  | string[]                            | —                                                             | Target locales (e.g. `["es","de"]`)  |
+| `temperature`         | 0–2                                 | `0.1`                                                         | Sampling temperature                 |
+| `topP`                | 0–1                                 | `1`                                                           | Nucleus sampling                     |
+| `concurrency`         | 1–32                                | `8`                                                           | Parallel API requests                |
+| `splitToken`          | 500–32000                           | `4000`                                                        | Max tokens per chunk                 |
+| `context`             | string                              | —                                                             | Domain context injected into prompts |
+| `prompts`             | `{ system?, user? }`                | —                                                             | Custom prompt templates              |
+| `placeholderPatterns` | string[]                            | —                                                             | Extra regex patterns to protect      |
+| `timeout`             | number (ms)                         | `120000`                                                      | Per-request timeout                  |
+| `review`              | boolean                             | `false`                                                       | Second review pass (2× API calls)    |
 
 Config file is auto-discovered as `.loqui.json` in the current directory.
 
@@ -100,16 +100,13 @@ Config file is auto-discovered as `.loqui.json` in the current directory.
 ## CLI
 
 ```
-loqui init                    Interactive setup — creates .loqui.json in the current directory
-loqui migrate [options]       Convert v2 hash sidecars and translation memory to v3 (run once)
+  loqui [input] [options]
+  loqui init                    Interactive setup wizard — creates .loqui.json
+  loqui migrate [options]       Convert v2 hash sidecars and translation memory to v3 (run once)
 
-loqui [input] [options]
-
-[input] — one of:
-  --input <file>         read from a JSON file
-  --input '<json>'       pass a JSON string inline
-  first positional arg   loqui en.json --from en --to es
-  stdin                  cat en.json | loqui --from en --to es
+  [input] — the path of a JSON file, one of:
+    --input <file>         loqui --input en.json --from en --to es
+    first positional arg   loqui en.json --from en --to es
 
 Options:
   --config <path>        Config file or directory (default: .loqui.json in cwd)
@@ -129,7 +126,7 @@ Options:
   --diff                 Compare source against existing locales, report changes
   --validate             Validate that target locales have the same keys as source
   --force                Re-translate all keys regardless of existing translations
-  --help, -h             Show help
+  --help, -h             Show this help
 ```
 
 Options take either form: `--to es,de` or `--to=es,de`. An unknown option is an error,
@@ -181,16 +178,10 @@ exactly the gap instead of paying for the whole file again.
 # Translate a file, write per-locale files
 loqui --input src/i18n/en.json --from en --to es,de --output src/i18n/{locale}.json
 
-# Pipe JSON through stdin, get JSON on stdout
-cat en.json | loqui --from en --to ja
-
-# Inline JSON as a positional arg
-loqui '{"hello":"Hello"}' --from en --to es
-
 # Incremental — only re-translate changed keys
 loqui --input en.json --from en --to es,de --output ./i18n/{locale}.json --incremental
 
-# Dry run — preview without any API calls or file writes
+# Dry run — print the planned requests and keys per locale, with no API calls or file writes
 loqui --input en.json --from en --to es --dry-run
 
 # Use a different engine and model
@@ -205,7 +196,7 @@ loqui --input en.json --from en --to es --engine anthropic --model claude-opus-4
 import { translate } from "@mihairo/loqui";
 
 const result = await translate({
-  input: "./en.json", // file path or raw JSON string
+  input: "./en.json", // path of the source JSON file; for a document in memory, use translateObject()
   from: "en",
   to: ["de", "es", "pt"],
   output: "./i18n/{locale}.json",
@@ -219,7 +210,7 @@ const result = await translate({
 
 ```typescript
 interface TranslateOptions {
-  input: string; // file path or raw JSON string
+  input: string; // path of the source JSON file; for a document in memory, use translateObject()
   from?: string; // source locale
   to?: string | string[]; // target locale(s)
   output?: string | Record<string, string>; // {locale} template, dir, or locale→path map
@@ -294,7 +285,7 @@ before it reads a file or calls an engine.
 ```typescript
 interface TranslateResult {
   locales: Record<string, JsonObject>; // one full document per target locale, keys sorted
-  stats: RunStats; // keysTranslated, apiRequests, elapsedMs, failedChunks, warnings
+  stats: RunStats; // keysTranslated, apiRequests, elapsedMs, failedChunks, warnings, plan
   removed: Record<string, string[]>; // keys pruned from each locale's existing file
   written: Record<string, string>; // locale → path; empty on a dry run or without `output`
 }
@@ -302,7 +293,9 @@ interface TranslateResult {
 
 `stats.warnings` lists what went wrong, as `{ code, message, locale?, key? }`. A key with
 `PLACEHOLDER_MISMATCH`, `MISSING_GLOSSARY_TERM` or `EMPTY_TRANSLATION` was not written and
-is retried on the next run. Filter on `code`, not on the message text.
+is retried on the next run. With a hash sidecar, a key turned down on three runs in a row is held back with `RETRY_CAP` until its source text changes; `--force` sends it anyway. Filter on `code`, not on the message text.
+
+`stats.plan` is what the run planned to send: `{ requests, keys }`, with `keys` counted per locale. On a dry run it is the only count that isn't zero. It covers the first pass: a review pass and the halves of a cut-off answer come on top.
 
 Documents are objects. Serialise them yourself with `JSON.stringify(doc, null, 2)` when
 you need text. If `output` is specified, files are written to disk and the same
@@ -385,6 +378,10 @@ try {
 | CLI: `--validate` mismatch exits `1`                         | exits `12` (`VALIDATION_FAILED`)                     |
 | a missing input file is a plain `ENOENT` error              | `LoquiError` `INPUT_NOT_FOUND`, exit `13`            |
 | ICU plural/select branch text is left untranslated          | translated; only the ICU structure is protected      |
+| `input` / `--input` takes a JSON string; the CLI reads JSON from stdin | a file path only; use `translateObject()` for a document in memory |
+| a key turned down on every run is re-sent on every run | held back after three runs in a row with `RETRY_CAP`, until its source changes |
+| translation memory holds one translation per source string | one per source string and parent path |
+| `LoquiConfig.model` is always set, `gemini-2.5-flash` by default, whatever the engine | optional; when unset, each engine uses its own default model |
 
 ---
 
@@ -549,7 +546,7 @@ glossary/
 
 The `--translation-memory` flag (formerly `--glossary`) caches whole-string translations by content hash. It is orthogonal to the terminology glossary — both can be active at the same time.
 
-A memory file written by an earlier version is ignored with a warning, and rebuilt as keys are translated.
+Memory is keyed by the source string and its parent path, so `buttons.save` and `menu.save` can hold different translations, while siblings under one parent share one. When a run is saved, an entry its input no longer uses is pruned, unless another input sharing the memory file still uses it. A memory file in the v2 format is refused: convert it once with `loqui migrate`.
 
 `--force` ignores the memory and overwrites it: every key goes to the engine, and the new translations replace what the memory held.
 
@@ -590,6 +587,8 @@ pruned, so the sidecar tracks the source rather than growing forever.
 Several inputs can share one `--hash-file`. Each input prunes only the keys it wrote,
 so the others' entries survive.
 
+The sidecar also counts, under `$attempts`, how many runs in a row each key was turned down; that count is what holds a key back with `RETRY_CAP`.
+
 v3 refuses a v2 sidecar (one flat map of hashes). Convert it once, naming every target
 locale and every input that shares it:
 
@@ -599,7 +598,7 @@ loqui migrate --to es,pt,de --input common.json --input admin.json --hash-file .
 
 The same run moves translation-memory entries to v3 keys, in the memory file next to each
 input or in the one `--translation-memory-file` names. An entry whose source string is in
-none of the inputs is dropped.
+none of the inputs is dropped, and one whose string sits under several parent paths is copied to each.
 
 ```sh
 loqui --input en.json --from en --to es,de --output ./i18n/{locale}.json --incremental
@@ -742,9 +741,11 @@ Controls how many source keys are bundled into a single LLM request. Higher = fe
 - **4000** — Recommended for Flash/GPT-4o-mini tier models
 - **12000+** — Recommended for Pro/GPT-4o tier models
 
+With `engine: anthropic`, the output limit loqui sends is capped at the model's own, which it asks the Models API for once per model.
+
 ### `concurrency` (default: 8)
 
-Number of simultaneous API requests. Higher = faster for large files but risks rate limits.
+Number of simultaneous API requests. Runs started together in one process on the same engine share this limit, at the lowest `concurrency` among them. Higher = faster for large files but risks rate limits.
 
 - Reduce to 3–4 if you see frequent 429s
 - Free-tier API keys: use 1–2

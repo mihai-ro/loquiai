@@ -6,6 +6,9 @@ import { readJson, setOwn } from './utils/json.js';
 const MASK_PREFIX = '⟦';
 const MASK_SUFFIX = '⟧';
 
+// The capture group makes `split` keep the tokens, at the odd indexes.
+const EXISTING_TOKEN = /(⟦[^⟦⟧]*⟧)/;
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -105,6 +108,7 @@ export function findTermsInText(text: string, terms: string[]): string[] {
  * Longest-first prevents a shorter term from masking inside a longer one.
  * The restore map preserves the matched occurrence's original casing.
  * T-prefix keeps sentinels disjoint from maskPlaceholders' `⟦n⟧` range.
+ * Sentinels already in `input` are left whole.
  */
 export function maskTerms(
   input: string,
@@ -116,11 +120,21 @@ export function maskTerms(
   let result = input;
   const ordered = [...terms].sort((a, b) => b.length - a.length);
   for (const term of ordered) {
-    result = result.replace(termRegex(term), (match) => {
-      const key = `${MASK_PREFIX}T${counter++}${MASK_SUFFIX}`;
-      map[key] = match;
-      return key;
-    });
+    const regex = termRegex(term);
+    // Only the text between existing tokens is searched: a term such as `1` or `T0` would
+    // otherwise match inside `⟦1⟧` or `⟦T0⟧` and break that token.
+    result = result
+      .split(EXISTING_TOKEN)
+      .map((part, index) =>
+        index % 2 === 1
+          ? part
+          : part.replace(regex, (match) => {
+              const key = `${MASK_PREFIX}T${counter++}${MASK_SUFFIX}`;
+              map[key] = match;
+              return key;
+            }),
+      )
+      .join('');
   }
   return { masked: result, map, nextCounter: counter };
 }

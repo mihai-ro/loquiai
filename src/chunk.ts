@@ -1,7 +1,8 @@
+import { acceptAnswer } from './accept.js';
 import { STRUCTURED_OUTPUT_MAX_PROPS } from './engines/utils.js';
 import { LoquiError } from './errors.js';
-import { buildGlossaryPromptBlock, findTermsInText, maskTerms } from './glossary.js';
-import { IcuMaskError, maskPlaceholders, restorePlaceholders } from './placeholder.js';
+import { buildGlossaryPromptBlock, maskTerms } from './glossary.js';
+import { IcuMaskError, maskPlaceholders } from './placeholder.js';
 import type {
   EngineAdapter,
   FlatTranslations,
@@ -39,40 +40,6 @@ interface ProcessChunkOptions {
   onRateLimited: () => void;
   glossaryModel?: GlossaryModel;
 }
-
-const SENTINEL = /⟦[^⟦⟧]*⟧/g;
-
-function countSentinels(text: string): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const [token] of text.matchAll(SENTINEL)) counts.set(token, (counts.get(token) ?? 0) + 1);
-  return counts;
-}
-
-/**
- * What is wrong with the sentinels in a model's answer, or null when they match what was sent:
- * every sent one back exactly as often, and no other.
- */
-function describePlaceholderFault(sent: string, answer: string, map: Record<string, string>): string | null {
-  const sentCounts = countSentinels(sent);
-  const answerCounts = countSentinels(answer);
-  const original = (token: string): string =>
-    Object.hasOwn(map, token) ? restorePlaceholders(map[token], map) : token;
-  const list = (tokens: string[]): string => [...new Set(tokens.map(original))].join(', ');
-
-  const missing = [...sentCounts.keys()].filter((token) => !answerCounts.has(token));
-  const repeated = [...sentCounts].filter(([token, n]) => answerCounts.has(token) && answerCounts.get(token) !== n);
-  const unsent = [...answerCounts.keys()].filter((token) => !sentCounts.has(token));
-
-  const faults: string[] = [];
-  if (missing.length > 0) faults.push(`is missing placeholders: ${list(missing)}`);
-  if (repeated.length > 0)
-    faults.push(`has placeholders a different number of times than sent: ${list(repeated.map(([t]) => t))}`);
-  if (unsent.length > 0) faults.push(`has placeholders that were never sent: ${list(unsent)}`);
-  return faults.length > 0 ? faults.join('; ') : null;
-}
-
-// Translations more than 4× the source length are almost certainly hallucinations.
-const MAX_EXPANSION_RATIO = 4;
 
 export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
   const {
@@ -122,80 +89,24 @@ export async function processChunk(opts: ProcessChunkOptions): Promise<void> {
         // may land: anything else would overwrite a value this run never meant to touch.
         if (!Object.hasOwn(sent.keys, key)) continue;
 
-        const map = maskMaps[key] ?? {};
-        const value = restorePlaceholders(masked, map);
-
-        if (!value.trim()) {
-          log.warning({
-            code: 'EMPTY_TRANSLATION',
-            message: `[${namespace}→${locale}] Empty translation for key: "${key}"`,
-            locale,
-            key,
-          });
-          continue;
-        }
-
-        // Checked on the model's answer, before restore: a sentinel nested inside another
-        // (a term or placeholder inside a tag) only exists in the map, never in the restored text.
-        // The sentinels that count are the ones actually sent; nested ones ride along with their outer one.
-        // Each must come back as often as it went out, and nothing else may look like one. Their
-        // order is the translation's to change: `{name}` and `{count}` legitimately swap places.
-        const fault = describePlaceholderFault(sent.keys[key], masked, map);
-        if (fault) {
+        const outcome = acceptAnswer({
+          key,
+          locale,
+          from,
+          namespace,
+          sent: sent.keys[key],
+          answer: masked,
+          map: maskMaps[key] ?? {},
+          source: sourceFlat[key] ?? '',
+          glossary: glossaryModel,
+        });
+        for (const warning of outcome.warnings) log.warning(warning);
+        if (!outcome.accepted) {
           rejected[locale].add(key);
-          log.warning({
-            code: 'PLACEHOLDER_MISMATCH',
-            message: `[${namespace}→${locale}] Key "${key}" ${fault} — skipped, will retry on next run`,
-            locale,
-            key,
-          });
           continue;
         }
 
-        // Glossary term-lock: the locked target term must appear in the translation.
-        if (glossaryModel) {
-          const sourceTerms = findTermsInText(sourceFlat[key] ?? '', Object.keys(glossaryModel.terms));
-          const missingTerms = sourceTerms.filter((term) => {
-            const perLocale = glossaryModel.terms[term];
-            const locked = perLocale && Object.hasOwn(perLocale, locale) ? perLocale[locale] : undefined;
-            return locked && !value.toLowerCase().includes(locked.toLowerCase());
-          });
-          if (missingTerms.length > 0) {
-            rejected[locale].add(key);
-            log.warning({
-              code: 'MISSING_GLOSSARY_TERM',
-              message: `[${namespace}→${locale}] Key "${key}" missing glossary term(s): ${missingTerms.join(', ')} — skipped, will retry on next run`,
-              locale,
-              key,
-            });
-            continue;
-          }
-        }
-
-        const sourceValue = sourceFlat[key] ?? '';
-
-        // Untranslated detection: value identical to source suggests the model
-        // returned the input unchanged. Warn but save — could be a proper noun.
-        if (locale !== from && sourceValue.trim() !== '' && value.trim() === sourceValue.trim()) {
-          log.warning({
-            code: 'UNTRANSLATED',
-            message: `[${namespace}→${locale}] Key "${key}" appears untranslated (identical to source)`,
-            locale,
-            key,
-          });
-        }
-
-        // Length explosion: ratio > 4× source is almost certainly a hallucination.
-        if (sourceValue.length > 0 && value.length > sourceValue.length * MAX_EXPANSION_RATIO) {
-          const ratio = Math.round(value.length / sourceValue.length);
-          log.warning({
-            code: 'LENGTH_RATIO',
-            message: `[${namespace}→${locale}] Key "${key}" translation is ${ratio}× source length — possible hallucination`,
-            locale,
-            key,
-          });
-        }
-
+        const { value } = outcome;
         workingTargets[locale][key] = value;
         delivered[locale].add(key);
         stats.keysTranslated++;
@@ -280,13 +191,14 @@ function maskChunk(
       onSkipped(key, 'the value contains ⟦ or ⟧, which loqui uses for its own placeholder markers');
       continue;
     }
-    // 1) mask do-not-translate terms first (T-prefix range: ⟦T0⟧, ⟦T1⟧…)
-    const termMask = maskTerms(value, noTranslate, 0);
-    // 2) mask placeholders on the already-term-masked string (⟦0⟧, ⟦1⟧…)
+    // Placeholders first (⟦0⟧, ⟦1⟧…), so a term that matches part of one, `{plan}` for the term
+    // `Plan`, cannot strip it of its mask. Terms are then masked in what is left (⟦T0⟧, ⟦T1⟧…).
     try {
-      const { masked, map } = maskPlaceholders(termMask.masked, customPatterns);
-      maskedKeys[key] = masked;
-      maskMaps[key] = { ...termMask.map, ...map };
+      const placeholders = maskPlaceholders(value, customPatterns);
+      const terms = maskTerms(placeholders.masked, noTranslate, 0);
+      maskedKeys[key] = terms.masked;
+      // Restore runs in reverse: terms come back first, then the placeholders around them.
+      maskMaps[key] = { ...placeholders.map, ...terms.map };
     } catch (err) {
       // Only the value's own malformation is skippable; a bad config pattern fails every key alike.
       if (!(err instanceof IcuMaskError)) throw err;

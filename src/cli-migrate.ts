@@ -1,6 +1,6 @@
 import { HELP_TEXT, unknownFlag } from './cli-args.js';
 import { LoquiError } from './errors.js';
-import { hashValue, isV2Sidecar, ownerId } from './hasher.js';
+import { hashValue, isV2Sidecar, ownerId, readOwners } from './hasher.js';
 import { loadSource, resolveConfig, resolveTargets, sidecarPath } from './project.js';
 import { isMemoryKey, memoryKey, saveTranslationMemory } from './translation-memory.js';
 import type { FlatTranslations, TranslationMemory } from './types.js';
@@ -83,7 +83,7 @@ function migrateSidecar(file: string, group: MigratedInput[], to: string[]): str
 function migrateMemory(file: string, group: MigratedInput[]): string {
   const raw = readJson(file) as TranslationMemory;
   if (Object.keys(raw).length === 0) return `${file}: not found, skipped`;
-  const old = Object.keys(raw).filter((key) => !isMemoryKey(key));
+  const old = Object.keys(raw).filter((key) => !key.startsWith('$') && !isMemoryKey(key));
   if (old.length === 0) return `${file}: already v3, unchanged`;
 
   // v2 keyed memory by the 8-character hash of the string, which only the inputs can undo.
@@ -101,7 +101,7 @@ function migrateMemory(file: string, group: MigratedInput[]): string {
     if (targets.length === 0) dropped++;
     for (const target of targets) migrated[target] = { ...raw[key], ...migrated[target] };
   }
-  saveTranslationMemory(file, migrated);
+  saveTranslationMemory(file, migrated, readOwners((raw as Record<string, unknown>).$owners));
   return `${file}: converted ${old.length - dropped} entr${old.length - dropped === 1 ? 'y' : 'ies'}, dropped ${dropped} whose string is in none of the inputs`;
 }
 

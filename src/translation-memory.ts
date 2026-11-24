@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { LoquiError } from './errors.js';
+import { readOwners } from './hasher.js';
 import type { TranslationMemory } from './types.js';
 import { readJson, setOwn, splitFlatKey, writeJson } from './utils/json.js';
 
@@ -29,31 +30,63 @@ export function memoryKey(value: string, flatKey: string): string {
   return createHash('sha256').update(`${value}\0${context}`).digest('hex').slice(0, 32);
 }
 
+/** What a memory file holds: the entries, and which input listed which of them. */
+export interface MemoryFile {
+  memory: TranslationMemory;
+  /** Owner id → the memory keys that input's source yielded when it last saved. */
+  owners: Record<string, string[]>;
+}
+
 /**
- * Loads a translation memory from a JSON file.
+ * Loads a translation memory from a JSON file. The top-level `$owners` key is the file's
+ * own bookkeeping and is never read as an entry.
  * Returns an empty translation memory if the file does not exist. A file with a key in
  * the old 8-character format is refused: the run would rewrite it without those entries
  * and the translations in them would be paid for again, so `loqui migrate` converts it first.
  */
-export function loadTranslationMemory(tmPath: string): TranslationMemory {
-  const data = readJson(tmPath) as TranslationMemory;
-  const old = Object.keys(data).filter((key) => !isMemoryKey(key));
+export function loadTranslationMemory(tmPath: string): MemoryFile {
+  const data = readJson(tmPath) as Record<string, unknown>;
+  const keys = Object.keys(data).filter((key) => !key.startsWith('$'));
+  const old = keys.filter((key) => !isMemoryKey(key));
   if (old.length > 0) {
     throw new LoquiError(
       'INVALID_CONFIG',
       `${tmPath} holds ${old.length} translation-memory entr${old.length === 1 ? 'y' : 'ies'} in the v2 key format, which v3 does not read. Convert the file once with \`loqui migrate\`.`,
     );
   }
-  return data;
+  const memory: TranslationMemory = {};
+  for (const key of keys) setOwn(memory, key, data[key]);
+  return { memory, owners: readOwners(data.$owners) };
 }
 
 /**
  * Saves a translation memory to a JSON file with 2-space indentation.
  * Creates parent directories if they don't exist.
  */
-export function saveTranslationMemory(tmPath: string, tm: TranslationMemory): void {
+export function saveTranslationMemory(
+  tmPath: string,
+  tm: TranslationMemory,
+  owners: Record<string, string[]> = {},
+): void {
   fs.mkdirSync(path.dirname(tmPath), { recursive: true });
-  writeJson(tmPath, tm as Record<string, unknown>);
+  const bookkeeping = Object.keys(owners).length > 0 ? { $owners: owners } : {};
+  writeJson(tmPath, { ...tm, ...bookkeeping });
+}
+
+/**
+ * The file after `owner` saved a run whose source yields `yielded`: the entries it listed
+ * before and no longer yields are dropped, unless another input lists them (memory keys are
+ * shared across inputs), and its list becomes `yielded`. Entries nobody lists, from a file
+ * that predates owners, are kept: nothing says whose they are.
+ */
+export function pruneMemory(file: MemoryFile, owner: string, yielded: ReadonlySet<string>): MemoryFile {
+  const before = Object.hasOwn(file.owners, owner) ? file.owners[owner] : [];
+  const listedByOthers = new Set(Object.entries(file.owners).flatMap(([id, keys]) => (id === owner ? [] : keys)));
+  const memory = { ...file.memory };
+  for (const key of before) {
+    if (!yielded.has(key) && !listedByOthers.has(key)) delete memory[key];
+  }
+  return { memory, owners: { ...file.owners, [owner]: [...yielded] } };
 }
 
 /**

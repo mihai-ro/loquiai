@@ -146,11 +146,24 @@ describe('loqui migrate — translation memory', () => {
 
     migrate(p.dir, '--to', 'es', a);
 
-    const migrated = loadTranslationMemory(p.file('.a.loqui-tm.json'));
+    const { memory: migrated } = loadTranslationMemory(p.file('.a.loqui-tm.json'));
     assert.deepEqual(
       Object.keys(migrated).sort(),
       [memoryKey('Save', 'buttons.save'), memoryKey('Save', 'menu.save'), memoryKey('Save', 'top')].sort(),
     );
+  });
+
+  test('keeps the owners a file already lists, and does not take `$owners` for a v2 entry', () => {
+    const p = project();
+    const a = p.write('a.json', { x: 'Alpha' });
+    const owners = { 'a.json': [memoryKey('Alpha', 'x')] };
+    p.write('.a.loqui-tm.json', { $owners: owners, [hashValue('Alpha')]: { es: 'A' } });
+
+    migrate(p.dir, '--to', 'es', a);
+
+    const migrated = p.read('.a.loqui-tm.json') as Record<string, unknown>;
+    assert.deepEqual(migrated.$owners, owners);
+    assert.deepEqual(migrated[memoryKey('Alpha', 'x')], { es: 'A' });
   });
 
   test('converts each input default memory file in one run, without a flag', () => {

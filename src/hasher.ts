@@ -48,7 +48,7 @@ export function ownerId(hashFile: string, inputPath: string): string {
   return path.relative(path.dirname(hashFile), inputPath).split(path.sep).join('/');
 }
 
-function readOwners(value: unknown): Record<string, string[]> {
+export function readOwners(value: unknown): Record<string, string[]> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
   return Object.fromEntries(
     Object.entries(value).map(([id, keys]) => [

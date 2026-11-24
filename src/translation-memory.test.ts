@@ -22,13 +22,13 @@ describe('translationMemory', () => {
   });
 
   it('loadTranslationMemory returns empty object when file does not exist', () => {
-    assert.deepStrictEqual(loadTranslationMemory('/nonexistent/path.json'), {});
+    assert.deepStrictEqual(loadTranslationMemory('/nonexistent/path.json'), { memory: {}, owners: {} });
   });
 
   it('loadTranslationMemory loads existing translation memory', () => {
     const data = { [memoryKey('hello', 'greeting')]: { fr: 'bonjour', de: 'hallo' } };
     fs.writeFileSync(tmPath, JSON.stringify(data, null, 2));
-    assert.deepStrictEqual(loadTranslationMemory(tmPath), data);
+    assert.deepStrictEqual(loadTranslationMemory(tmPath).memory, data);
   });
 
   it('loadTranslationMemory refuses a file with a key in the v2 format, naming the file and loqui migrate', () => {
@@ -135,6 +135,6 @@ describe('translationMemory', () => {
   it('load/save roundtrip preserves data', () => {
     const original = { [memoryKey('hello', 'greeting')]: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
     saveTranslationMemory(tmPath, original);
-    assert.deepStrictEqual(loadTranslationMemory(tmPath), original);
+    assert.deepStrictEqual(loadTranslationMemory(tmPath).memory, original);
   });
 });

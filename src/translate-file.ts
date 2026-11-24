@@ -24,7 +24,7 @@ import {
   sidecarPath,
 } from './project.js';
 import { translateObject } from './translate-object.js';
-import { loadTranslationMemory, saveTranslationMemory } from './translation-memory.js';
+import { loadTranslationMemory, memoryKey, pruneMemory, saveTranslationMemory } from './translation-memory.js';
 import type { LocaleHashes, ObjectRun, TranslateResult, TranslationMemory } from './types.js';
 import { setOwn, writeFileAtomic } from './utils/json.js';
 
@@ -72,7 +72,8 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   // load translation memory if enabled
   const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
   const tmFilePath = sidecarPath(inputPath, options.translationMemoryFile, 'tm');
-  const translationMemory: TranslationMemory = useTranslationMemory ? loadTranslationMemory(tmFilePath) : {};
+  const memoryFile = useTranslationMemory ? loadTranslationMemory(tmFilePath) : { memory: {}, owners: {} };
+  const translationMemory: TranslationMemory = memoryFile.memory;
 
   const glossaryModel = buildGlossaryModel(
     config.glossary,
@@ -104,7 +105,15 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
         mergeRun(sidecar, owner, sourceFlat, Object.keys(written), run, ownAttempts(sidecar.attempts, owner)),
       );
     }
-    if (useTranslationMemory) saveTranslationMemory(tmFilePath, run.memory);
+    if (useTranslationMemory) {
+      const yielded = new Set(Object.entries(sourceFlat).map(([key, value]) => memoryKey(value, key)));
+      const { memory, owners } = pruneMemory(
+        { memory: run.memory, owners: memoryFile.owners },
+        ownerId(tmFilePath, inputPath),
+        yielded,
+      );
+      saveTranslationMemory(tmFilePath, memory, owners);
+    }
     return written;
   };
 

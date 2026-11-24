@@ -614,6 +614,71 @@ describe('translateJson — a changed key that did not land', () => {
   });
 });
 
+describe('translateJson — ICU branch text', () => {
+  const run = (sourceFlat: Record<string, string>, transform: (v: string) => string) =>
+    translateJson({
+      logger: silent,
+      sourceFlat,
+      from: 'en',
+      to: ['es'],
+      namespace: 'test',
+      config,
+      engine: makeEngine(transform),
+    });
+
+  test('translates the text of each plural branch and keeps the structure', async () => {
+    const { translations, stats } = await run(
+      { n: 'You have {count, plural, one {# message} other {# messages}}' },
+      (v) => v.replace(/message/g, 'mensaje'),
+    );
+
+    assert.equal(translations.es.n, 'You have {count, plural, one {# mensaje} other {# mensajes}}');
+    assert.deepEqual(stats.warnings, []);
+  });
+
+  test('translates a branch that opens with a variable, with no NOT_SENT', async () => {
+    const { translations, stats } = await run({ n: '{count, plural, one {{count} file} other {{count} files}}' }, (v) =>
+      v.replace(/file/g, 'archivo'),
+    );
+
+    assert.equal(translations.es.n, '{count, plural, one {{count} archivo} other {{count} archivos}}');
+    assert.deepEqual(stats.warnings, []);
+  });
+
+  test('translates both levels of a select nested in a plural', async () => {
+    const { translations } = await run(
+      {
+        n: '{c, plural, one {{g, select, male {He has # cat} other {She has # cat}}} other {# cats}}'.replace(
+          '{{g',
+          '{ {g',
+        ),
+      },
+      (v) =>
+        v
+          .replace(/cat/g, 'gato')
+          .replace(/He has/g, 'Él tiene')
+          .replace(/She has/g, 'Ella tiene'),
+    );
+
+    assert.equal(
+      translations.es.n,
+      '{c, plural, one { {g, select, male {Él tiene # gato} other {Ella tiene # gato}}} other {# gatos}}',
+    );
+  });
+
+  test('rejects an answer that drops one selector sentinel', async () => {
+    const { translations, stats } = await run({ n: '{c, plural, one {# cat} other {# cats}}' }, (v) =>
+      v.replace('⟦2⟧', ''),
+    );
+
+    assert.equal(translations.es.n, undefined);
+    assert.deepEqual(
+      stats.warnings.map((w) => w.code),
+      ['PLACEHOLDER_MISMATCH'],
+    );
+  });
+});
+
 describe('translateJson — a malformed ICU value', () => {
   const UNBALANCED = '{g, select, male {he} other {they}} bought {n, plural, one {# item} other {# items}';
 

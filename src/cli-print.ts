@@ -1,5 +1,5 @@
 import type { DiffResult } from './diff.js';
-import type { RunStats } from './types.js';
+import type { RunPlanSummary, RunStats } from './types.js';
 import { stderrLogger } from './utils/logger.js';
 import type { ValidationResult } from './validate.js';
 
@@ -26,6 +26,13 @@ export function printSuccess(msg: string): void {
 
 export function printError(msg: string): void {
   process.stderr.write(colorEnabled() ? `${RED} ❌ Error:${NC} ${YELLOW}${msg}${NC}\n` : ` ❌ Error: ${msg}\n`);
+}
+
+/** What a dry run would send: the requests and each locale's keys. */
+export function formatPlan({ requests, keys }: RunPlanSummary): string {
+  if (requests === 0) return 'Plan: nothing to send.';
+  const perLocale = Object.entries(keys).map(([locale, count]) => `${locale}: ${count} key(s)`);
+  return `Plan: ${requests} request(s) — ${perLocale.join(', ')}`;
 }
 
 /** The end-of-run summary: totals, then every warning of the run once more, last where it is seen. */

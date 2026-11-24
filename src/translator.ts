@@ -93,6 +93,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
     elapsedMs: 0,
     warnings: [],
     failedChunks: 0,
+    plan: { requests: 0, keys: {} },
   };
   const log = createRunLog(stats, opts.logger);
   const startTime = Date.now();
@@ -103,6 +104,7 @@ export async function translateJson(opts: TranslateJobOptions): Promise<Translat
   const plan = planRun(opts, translationMemory, log, stats);
   const { workingTargets, delivered, outstanding, currentSourceHashes, memoryKeys } = plan;
   const { chunks } = plan;
+  stats.plan = plan.summary;
   const rejected: Record<string, Set<string>> = Object.fromEntries(to.map((locale) => [locale, new Set<string>()]));
   const rejectedLists = (): Record<string, string[]> =>
     Object.fromEntries(Object.entries(rejected).map(([locale, keys]) => [locale, [...keys]]));

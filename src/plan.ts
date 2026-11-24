@@ -7,6 +7,7 @@ import type {
   LocaleHashes,
   LoquiConfig,
   RunLog,
+  RunPlanSummary,
   RunStats,
   TranslationChunk,
   TranslationMemory,
@@ -44,8 +45,19 @@ export interface RunPlan {
   currentSourceHashes: HashStore;
   /** the memory key of each key that was looked up. */
   memoryKeys: Record<string, string>;
+  /** what the chunks add up to, for the run's stats. */
+  summary: RunPlanSummary;
   /** empty when nothing has to be sent. */
   chunks: PlannedChunk[];
+}
+
+/** What the chunks add up to: the request count, and the keys each locale is sent. */
+function summarize(chunks: PlannedChunk[]): RunPlanSummary {
+  const keys: Record<string, number> = {};
+  for (const { chunk, locales } of chunks) {
+    for (const locale of locales) keys[locale] = (keys[locale] ?? 0) + Object.keys(chunk.keys).length;
+  }
+  return { requests: chunks.length, keys };
 }
 
 /**
@@ -137,6 +149,7 @@ export function planRun(
   // Computed once, for the keys that are looked up; the write-back reuses them.
   const memoryKeys: Record<string, string> = {};
   const finish = (chunks: PlannedChunk[]): RunPlan => ({
+    summary: summarize(chunks),
     workingTargets,
     delivered,
     outstanding,
@@ -209,7 +222,7 @@ export function planRun(
   );
   log(
     'debug',
-    `[${namespace}] ${chunks.length} chunk(s) over ${groups.size} locale group(s) = ${dryRun ? '0 (dry-run)' : chunks.length} request(s)`,
+    `[${namespace}] ${chunks.length} chunk(s) over ${groups.size} locale group(s) = ${chunks.length} request(s)${dryRun ? ' planned, none sent (dry-run)' : ''}`,
   );
 
   return finish(chunks);

@@ -3,6 +3,7 @@ import { type InputStream, runInit } from './cli-init.js';
 import { runMigrate } from './cli-migrate.js';
 import {
   formatDiffReport,
+  formatPlan,
   formatValidateReport,
   logStats,
   printError,
@@ -117,6 +118,7 @@ export async function main({ stdin = process.stdin, stdout = process.stdout }: C
 
   const { locales, stats, written } = result;
   logStats(stats);
+  if (args.dryRun) stderrLogger('info', formatPlan(stats.plan));
   const names = Object.keys(locales);
   if (!args.output) {
     stdout.write(`${JSON.stringify(names.length === 1 ? locales[names[0]] : locales, null, 2)}\n`);

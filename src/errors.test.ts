@@ -32,7 +32,14 @@ describe('LoquiError', () => {
   test('can carry the result of a failed run', () => {
     const result = {
       locales: { es: {} },
-      stats: { keysTranslated: 0, apiRequests: 0, elapsedMs: 0, warnings: [], failedChunks: 1 },
+      stats: {
+        keysTranslated: 0,
+        apiRequests: 0,
+        elapsedMs: 0,
+        warnings: [],
+        failedChunks: 1,
+        plan: { requests: 0, keys: {} },
+      },
       removed: { es: [] },
     };
     const err = new LoquiError('CHUNK_FAILED', 'chunk 1 failed', { result });

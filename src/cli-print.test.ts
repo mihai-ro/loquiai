@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Writable } from 'node:stream';
 import { describe, test } from 'node:test';
-import { logStats, printError } from './cli-print.js';
+import { formatPlan, logStats, printError } from './cli-print.js';
 import type { RunStats } from './types.js';
 
 /** Collects everything written to a stream, for asserting on wizard output. */
@@ -51,6 +51,7 @@ describe('logStats — the end-of-run summary', () => {
     elapsedMs: 0,
     warnings: [],
     failedChunks: 0,
+    plan: { requests: 0, keys: {} },
     ...over,
   });
 
@@ -115,5 +116,18 @@ describe('the CLI printers', () => {
     assert.match(tinted, /❌ Error:/);
     assert.match(tinted, /boom/);
     assert.ok(tinted.includes('\u001b['));
+  });
+});
+
+describe('formatPlan', () => {
+  test('names the requests and each locale’s keys', () => {
+    assert.equal(
+      formatPlan({ requests: 3, keys: { es: 12, pt: 9 } }),
+      'Plan: 3 request(s) — es: 12 key(s), pt: 9 key(s)',
+    );
+  });
+
+  test('says so when there is nothing to send', () => {
+    assert.equal(formatPlan({ requests: 0, keys: {} }), 'Plan: nothing to send.');
   });
 });

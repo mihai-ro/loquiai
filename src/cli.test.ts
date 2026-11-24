@@ -370,7 +370,8 @@ describe('main — what the CLI still says on stderr', () => {
     });
 
     assert.match(streams.err, /\[input-\d+\] \[dry-run\] Translating 1 key\(s\) → fr/);
-    assert.match(streams.err, /1 chunk\(s\) over 1 locale group\(s\) = 0 \(dry-run\) request\(s\)/);
+    assert.match(streams.err, /1 chunk\(s\) over 1 locale group\(s\) = 1 request\(s\) planned, none sent/);
+    assert.match(streams.err, /Plan: 1 request\(s\) — fr: 1 key\(s\)/);
   });
 
   test('--validate prints each mismatch on stdout and exits 1', async () => {

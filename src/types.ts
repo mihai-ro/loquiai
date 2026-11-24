@@ -152,6 +152,17 @@ export interface RunLog extends LogFn {
   warning(warning: RunWarning): void;
 }
 
+/** What a run sends: the first-pass requests, and how many keys each locale is sent. */
+export interface RunPlanSummary {
+  /**
+   * Requests for the planned chunks. A review pass (`config.review`) and a response that is
+   * cut off and re-sent in halves add more, and neither is known before an engine answers.
+   */
+  requests: number;
+  /** locale → keys sent for it, after translation memory and the retry cap took theirs out. */
+  keys: Record<string, number>;
+}
+
 /** Runtime statistics collected during a translation run. */
 export interface RunStats {
   /** Number of keys successfully translated. */
@@ -164,6 +175,8 @@ export interface RunStats {
   warnings: RunWarning[];
   /** Chunks that failed after all retries. Their keys are absent from the output. */
   failedChunks: number;
+  /** What the run planned to send. A dry run sends nothing, so this is all it reports. */
+  plan: RunPlanSummary;
 }
 
 /** A parsed JSON document. */

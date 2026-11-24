@@ -59,6 +59,10 @@ describe('EXIT_CODES', () => {
     'PARSE_ERROR',
     'CHUNK_FAILED',
     'INVALID_CONFIG',
+    'TRUNCATED',
+    'INVALID_USAGE',
+    'VALIDATION_FAILED',
+    'INPUT_NOT_FOUND',
   ];
 
   test('every LoquiErrorCode has a unique exit code', () => {
@@ -84,5 +88,10 @@ describe('EXIT_CODES', () => {
 
   test('INVALID_CONFIG maps to 9', () => {
     assert.equal(EXIT_CODES.INVALID_CONFIG, 9);
+  });
+
+  test('VALIDATION_FAILED maps to 12 and INPUT_NOT_FOUND to 13', () => {
+    assert.equal(EXIT_CODES.VALIDATION_FAILED, 12);
+    assert.equal(EXIT_CODES.INPUT_NOT_FOUND, 13);
   });
 });

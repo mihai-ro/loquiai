@@ -185,7 +185,7 @@ function sortValue(val: unknown): unknown {
 
 /**
  * reads and parses a JSON file. A file that does not exist reads as an empty object; one
- * that cannot be read or parsed is an error, because reading it as empty means the caller
+ * that cannot be read, parsed or is not an object is an error, because reading it as empty means the caller
  * rewrites it — a target file with a merge-conflict marker would be translated from
  * scratch and overwritten.
  */
@@ -197,8 +197,9 @@ export function readJson(filePath: string): Record<string, unknown> {
     if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return {};
     throw err;
   }
+  let parsed: unknown;
   try {
-    return JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch (err) {
     throw new LoquiError(
       'PARSE_ERROR',
@@ -208,6 +209,15 @@ export function readJson(filePath: string): Record<string, unknown> {
       },
     );
   }
+  return assertJsonObject(parsed, filePath);
+}
+
+/** A document is a JSON object: `null`, an array, a string or a number is not one a run can use. */
+export function assertJsonObject(value: unknown, filePath: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new LoquiError('PARSE_ERROR', `${filePath} is valid JSON but not a JSON object.`);
+  }
+  return value as Record<string, unknown>;
 }
 
 /**

@@ -10,7 +10,9 @@ export type LoquiErrorCode =
   | 'CHUNK_FAILED'
   | 'INVALID_CONFIG'
   | 'TRUNCATED'
-  | 'INVALID_USAGE';
+  | 'INVALID_USAGE'
+  | 'VALIDATION_FAILED'
+  | 'INPUT_NOT_FOUND';
 
 /** What a run that failed in some of its chunks did get done. */
 export type FailedRunResult = TranslationRun & {
@@ -52,4 +54,6 @@ export const EXIT_CODES: Record<LoquiErrorCode, number> = {
   INVALID_CONFIG: 9,
   TRUNCATED: 10,
   INVALID_USAGE: 11,
+  VALIDATION_FAILED: 12,
+  INPUT_NOT_FOUND: 13,
 };

@@ -102,7 +102,8 @@ export async function main({ stdin = process.stdin, stdout = process.stdout }: C
       if (!args.output) throw new LoquiError('INVALID_USAGE', '--validate needs --output: the target files to check.');
       const results = validate(inspect);
       stdout.write(formatValidateReport(results));
-      if (results.some((r) => r.missing.length > 0 || r.extra.length > 0)) process.exitCode = 1;
+      if (results.some((r) => r.missing.length > 0 || r.extra.length > 0))
+        process.exitCode = EXIT_CODES.VALIDATION_FAILED;
     }
     return;
   }

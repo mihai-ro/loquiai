@@ -160,7 +160,7 @@ describe('main — stream separation', () => {
         );
       });
 
-      assert.equal(process.exitCode, 1);
+      assert.equal(process.exitCode, 12);
       assert.equal(
         streams.out,
         ' [fr]\n   ✗ no target file: all 2 key(s) missing\n Summary: 2 missing, 0 extra, 0 ok\n',
@@ -318,8 +318,13 @@ describe('main — help text', () => {
     });
 
     assert.match(streams.out, /4 +TIMEOUT +— request timed out\n/);
-    assert.match(streams.out, /7 +PARSE_ERROR +— a response, the input, or a file on disk is not valid JSON\n/);
-    assert.match(streams.out, /11 +INVALID_USAGE +— invalid command-line usage\n?/);
+    assert.match(
+      streams.out,
+      /7 +PARSE_ERROR +— a response, the input, or a file on disk is not valid JSON or not a JSON object\n/,
+    );
+    assert.match(streams.out, /11 +INVALID_USAGE +— invalid command-line usage\n/);
+    assert.match(streams.out, /12 +VALIDATION_FAILED +— --validate found missing or extra keys/);
+    assert.match(streams.out, /13 +INPUT_NOT_FOUND +— the input file does not exist/);
   });
 });
 
@@ -398,7 +403,7 @@ describe('main — what the CLI still says on stderr', () => {
         );
       });
 
-      assert.equal(process.exitCode, 1);
+      assert.equal(process.exitCode, 12);
       assert.equal(streams.out, ' [fr]\n   ✗ missing: b\n   ✗ extra: stale\n Summary: 1 missing, 1 extra, 1 ok\n');
       assert.doesNotMatch(streams.err, /missing|Summary/);
     } finally {

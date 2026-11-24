@@ -3,7 +3,7 @@ import path from 'node:path';
 import { loadConfig, validateConfig, validateTargets } from './config.js';
 import { LoquiError } from './errors.js';
 import type { FlatTranslations, JsonObject, LoquiConfig } from './types.js';
-import { flatten, readJson } from './utils/json.js';
+import { assertJsonObject, flatten, readJson } from './utils/json.js';
 
 /**
  * The loading `translate()`, `diff()` and `validate()` share: the config, the source, the
@@ -48,24 +48,37 @@ export interface LoadedSource {
 export function loadSource(input: string, config: LoquiConfig): LoadedSource {
   const isRawJson = input.trimStart().startsWith('{');
   const inputPath = isRawJson ? null : path.resolve(input);
-  const inputJson = isRawJson ? input : fs.readFileSync(path.resolve(input), 'utf-8');
+  const inputJson = isRawJson ? input : readInputFile(path.resolve(input));
 
   let inlineGlossaryTerms: Record<string, Record<string, string>> | undefined;
   // Only strip the inline `glossary` key when the feature is active and no external path is set.
   // Without this gate, any namespace legitimately named "glossary" would be silently deleted.
   const useInlineGlossary = Boolean(config.glossary) && !config.glossary?.path;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(inputJson) as JsonObject;
-    if (useInlineGlossary && parsed && typeof parsed === 'object' && 'glossary' in parsed) {
-      const raw = parsed.glossary;
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        inlineGlossaryTerms = raw as Record<string, Record<string, string>>;
-      }
-      delete parsed.glossary;
-    }
-    return { inputPath, source: parsed, sourceFlat: flatten(parsed).strings, inlineGlossaryTerms };
+    parsed = JSON.parse(inputJson);
   } catch {
     throw new LoquiError('PARSE_ERROR', 'Failed to parse input as JSON. Make sure it is a valid JSON object.');
+  }
+  const source = assertJsonObject(parsed, inputPath ?? 'The input') as JsonObject;
+  if (useInlineGlossary && 'glossary' in source) {
+    const raw = source.glossary;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      inlineGlossaryTerms = raw as Record<string, Record<string, string>>;
+    }
+    delete source.glossary;
+  }
+  return { inputPath, source, sourceFlat: flatten(source).strings, inlineGlossaryTerms };
+}
+
+function readInputFile(inputPath: string): string {
+  try {
+    return fs.readFileSync(inputPath, 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      throw new LoquiError('INPUT_NOT_FOUND', `The input file does not exist: ${inputPath}`, { cause: err });
+    }
+    throw err;
   }
 }
 

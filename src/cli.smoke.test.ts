@@ -168,14 +168,14 @@ describe('built CLI — --diff and --validate report on stdout', () => {
     return path.join(dir, '{locale}.json');
   }
 
-  test('--validate prints the report on stdout, only diagnostics on stderr, and exits 1 on a mismatch', () => {
+  test('--validate prints the report on stdout, only diagnostics on stderr, and exits 12 on a mismatch', () => {
     const result = spawnSync(
       process.execPath,
       [binLink, '{"a":"x","b":"y"}', '--to', 'es', '--validate', '--output', target()],
       { encoding: 'utf-8', cwd: tmpDir },
     );
 
-    assert.equal(result.status, 1, `stderr: ${result.stderr}`);
+    assert.equal(result.status, 12, `stderr: ${result.stderr}`);
     assert.match(result.stdout, /\[es\]/);
     assert.match(result.stdout, /✗ missing: b/);
     assert.match(result.stdout, /✗ extra: stale/);
@@ -210,5 +210,43 @@ describe('built CLI — --diff and --validate report on stdout', () => {
     assert.match(result.stdout, /Summary: 1 added, 1 removed, 0 changed, 1 unchanged/);
     assert.match(result.stderr, /No hash sidecar found/);
     assert.doesNotMatch(result.stderr, /Summary/);
+  });
+});
+
+describe('built CLI — expected failures have their own exit code', () => {
+  function run(...args: string[]) {
+    return spawnSync(process.execPath, [binLink, ...args], { encoding: 'utf-8', cwd: tmpDir });
+  }
+
+  test('a missing input file exits 13 and names the path', () => {
+    const result = run('nope.json', '--from', 'en', '--to', 'es');
+
+    assert.equal(result.status, 13, `stderr: ${result.stderr}`);
+    assert.match(result.stderr, /nope\.json/);
+  });
+
+  test('a source that is not a JSON object exits 7 and names the file', () => {
+    const dir = fs.mkdtempSync(path.join(tmpDir, 'array-'));
+    const source = path.join(dir, 'en.json');
+    fs.writeFileSync(source, '[1]', 'utf-8');
+
+    const result = run(source, '--from', 'en', '--to', 'es', '--output', path.join(dir, '{locale}.json'));
+
+    assert.equal(result.status, 7, `stderr: ${result.stderr}`);
+    assert.ok(result.stderr.includes(source), result.stderr);
+  });
+
+  test('a target that holds null exits 7 and names the file', () => {
+    const dir = fs.mkdtempSync(path.join(tmpDir, 'null-'));
+    const source = path.join(dir, 'en.json');
+    const target = path.join(dir, 'es.json');
+    fs.writeFileSync(source, '{"a":"x"}', 'utf-8');
+    fs.writeFileSync(target, 'null', 'utf-8');
+
+    const result = run(source, '--from', 'en', '--to', 'es', '--output', path.join(dir, '{locale}.json'));
+
+    assert.equal(result.status, 7, `stderr: ${result.stderr}`);
+    assert.ok(result.stderr.includes(target), result.stderr);
+    assert.equal(fs.readFileSync(target, 'utf-8'), 'null', 'the file is left alone');
   });
 });

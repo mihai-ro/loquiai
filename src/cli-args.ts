@@ -50,11 +50,13 @@ Exit codes:
   4  TIMEOUT         — request timed out
   5  NETWORK_ERROR   — network failure after retries
   6  INVALID_RESPONSE — API returned an unexpected response
-  7  PARSE_ERROR     — a response, the input, or a file on disk is not valid JSON
+  7  PARSE_ERROR     — a response, the input, or a file on disk is not valid JSON or not a JSON object
   8  CHUNK_FAILED    — one or more translation chunks failed
   9  INVALID_CONFIG  — .loqui.json is missing required fields or has invalid values
   10 TRUNCATED       — the engine hit its output token limit mid-response
   11 INVALID_USAGE   — invalid command-line usage
+  12 VALIDATION_FAILED — --validate found missing or extra keys, or a locale with no file
+  13 INPUT_NOT_FOUND — the input file does not exist
 `.trim();
 
 const VALUE_FLAGS = new Set([

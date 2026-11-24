@@ -96,6 +96,14 @@ describe('translate — basic functionality', () => {
     );
   });
 
+  test('rejects a missing input file with INPUT_NOT_FOUND, naming the path', async () => {
+    const missing = path.join(nextTmp(), 'nope.json');
+    await assert.rejects(
+      () => translate({ input: missing, from: 'en', to: 'fr', engine: makeEngine() }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INPUT_NOT_FOUND' && err.message.includes(missing),
+    );
+  });
+
   test('throws when to locales are missing', async () => {
     await assert.rejects(
       () =>

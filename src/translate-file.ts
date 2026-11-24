@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type FailedRunResult, LoquiError } from './errors.js';
 import { buildGlossaryModel } from './glossary.js';
-import { loadHashStore, saveHashStore } from './hasher.js';
+import { localeStore, mergeOwnedHashes, readSidecar, type Sidecar, saveSidecar } from './hasher.js';
 import type { TranslateOptions } from './lib.js';
 import {
   assertEveryLocaleMapped,
@@ -39,7 +39,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   if (!from) throw new LoquiError('INVALID_CONFIG', "'from' (source locale) is required. Set it in options or config.");
 
   const to = resolveTargets(options.to, config);
-  const { inputPath, source, inlineGlossaryTerms } = loadSource(options.input, config);
+  const { inputPath, source, sourceFlat, inlineGlossaryTerms } = loadSource(options.input, config);
 
   const namespace =
     options.namespace ?? (inputPath ? path.basename(inputPath, path.extname(inputPath)) : 'translation');
@@ -52,7 +52,13 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   // Read only when the run uses it: a corrupt sidecar it never consults must not fail it.
   const useIncremental = options.incremental || Boolean(options.hashFile);
   const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
-  const hashStore: LocaleHashes = hashFilePath && useIncremental ? loadHashStore(hashFilePath, to) : {};
+  const sidecar: Sidecar = hashFilePath && useIncremental ? readSidecar(hashFilePath, to) : { locales: {}, owners: {} };
+  const hashStore: LocaleHashes = sidecar.locales;
+  // Inputs sharing one sidecar are told apart by their path from it; raw JSON has only its namespace.
+  const ownerId =
+    hashFilePath && inputPath
+      ? path.relative(path.dirname(hashFilePath), inputPath).split(path.sep).join('/')
+      : namespace;
 
   // load translation memory if enabled
   const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
@@ -85,11 +91,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     // A locale's hashes move only with its file: nothing written for it means it still
     // owes whatever it owed, whichever other locales this run delivered.
     if (useIncremental && hashFilePath && Object.keys(written).length > 0) {
-      const saved: LocaleHashes = { ...hashStore };
-      for (const locale of Object.keys(written)) {
-        if (Object.hasOwn(run.hashes, locale)) saved[locale] = run.hashes[locale];
-      }
-      saveHashStore(hashFilePath, saved);
+      saveSidecar(hashFilePath, mergeRun(sidecar, ownerId, Object.keys(sourceFlat), Object.keys(written), run.hashes));
     }
     if (useTranslationMemory && tmFilePath) saveTranslationMemory(tmFilePath, run.memory);
     return written;
@@ -155,4 +157,33 @@ function completeFailure(
       : 'No output path is set, so nothing was saved. Set one to keep partial results; API callers can read error.result.';
   }
   return new LoquiError('CHUNK_FAILED', `${failure.message} ${outcome}`, { cause: failure.cause, result });
+}
+
+/**
+ * The sidecar after this input delivered `delivered`: their hashes merged in per owner, and
+ * this input's key list moved to its current source. A key it dropped stays on the list
+ * while a locale it did not deliver still holds it, so that locale's next run prunes it.
+ */
+function mergeRun(
+  sidecar: Sidecar,
+  ownerId: string,
+  sourceKeys: string[],
+  delivered: string[],
+  runHashes: LocaleHashes,
+): Sidecar {
+  const ownedBefore = new Set(Object.hasOwn(sidecar.owners, ownerId) ? sidecar.owners[ownerId] : []);
+  const ownedByOthers = new Set(Object.entries(sidecar.owners).flatMap(([id, keys]) => (id === ownerId ? [] : keys)));
+  const locales: LocaleHashes = { ...sidecar.locales };
+  for (const locale of delivered) {
+    if (!Object.hasOwn(runHashes, locale)) continue;
+    locales[locale] = mergeOwnedHashes(
+      localeStore(sidecar.locales, locale),
+      ownedBefore,
+      ownedByOthers,
+      runHashes[locale],
+    );
+  }
+  const held = new Set(Object.values(locales).flatMap((store) => Object.keys(store)));
+  const owned = new Set([...sourceKeys, ...[...ownedBefore].filter((key) => held.has(key))]);
+  return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] } };
 }

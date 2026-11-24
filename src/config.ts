@@ -83,6 +83,14 @@ export function validateTargets(to: string[]): void {
   if (to.includes('__proto__')) {
     throw new LoquiError('INVALID_CONFIG', "'__proto__' is not a valid target locale");
   }
+  // The hash sidecar keeps its own bookkeeping under top-level keys that start with `$`.
+  const reserved = to.find((locale) => locale.startsWith('$'));
+  if (reserved !== undefined) {
+    throw new LoquiError(
+      'INVALID_CONFIG',
+      `'${reserved}' is not a valid target locale: names starting with '$' are reserved`,
+    );
+  }
 }
 
 export function validateConfig(config: LoquiConfig, source: string): void {

@@ -1422,7 +1422,8 @@ describe('translate — the hash sidecar is kept per locale', () => {
     await p.run(['es', 'pt']);
 
     assert.equal(p.calls() - before, 0);
-    assert.deepEqual(p.sidecar(), { es: flat, pt: flat });
+    const { $owners: _owners, ...locales } = p.sidecar();
+    assert.deepEqual(locales, { es: flat, pt: flat });
   });
 
   test('a v2 flat sidecar is not expanded to locales outside `to`', async () => {
@@ -1432,7 +1433,10 @@ describe('translate — the hash sidecar is kept per locale', () => {
 
     await p.run(['es']);
 
-    assert.deepEqual(Object.keys(p.sidecar()), ['es']);
+    assert.deepEqual(
+      Object.keys(p.sidecar()).filter((key) => !key.startsWith('$')),
+      ['es'],
+    );
   });
 
   test('diff() reports a key as changed for the locale that was not re-delivered', async () => {
@@ -1486,5 +1490,100 @@ describe('translate — the hash sidecar is kept per locale', () => {
     });
 
     assert.equal(fs.readFileSync(p.hashFile, 'utf-8'), before);
+  });
+});
+
+describe('translate — inputs sharing one hash sidecar', () => {
+  function shared() {
+    const dir = nextTmp();
+    fs.mkdirSync(dir, { recursive: true });
+    const hashFile = path.join(dir, 'shared-hash.json');
+    let calls = 0;
+    const engine: EngineAdapter = {
+      async translateChunk({ chunk, targetLocales }) {
+        calls++;
+        const result: Record<string, TranslationResult> = {};
+        for (const locale of targetLocales) {
+          result[locale] = {
+            keys: Object.fromEntries(Object.entries(chunk.keys).map(([k, v]) => [k, `${locale}:${v}`])),
+          };
+        }
+        return result;
+      },
+    };
+    const write = (name: string, doc: Record<string, string>) =>
+      fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(doc), 'utf-8');
+    const run = (name: string) =>
+      translate({
+        input: path.join(dir, `${name}.json`),
+        from: 'en',
+        to: ['es'],
+        output: path.join(dir, `${name}-{locale}.json`),
+        hashFile,
+        engine,
+      });
+    return {
+      hashFile,
+      write,
+      run,
+      calls: () => calls,
+      reset: () => {
+        calls = 0;
+      },
+      sidecar: () => JSON.parse(fs.readFileSync(hashFile, 'utf-8')),
+      target: (name: string) => JSON.parse(fs.readFileSync(path.join(dir, `${name}-es.json`), 'utf-8')),
+    };
+  }
+
+  test('a key edited in one input is retranslated after another input ran', async () => {
+    const p = shared();
+    p.write('a', { k1: 'one' });
+    p.write('b', { k2: 'two' });
+    await p.run('a');
+    await p.run('b');
+
+    p.write('a', { k1: 'one edited' });
+    p.reset();
+    await p.run('a');
+
+    assert.equal(p.calls(), 1);
+    assert.deepEqual(p.target('a'), { k1: 'es:one edited' });
+  });
+
+  test('a key deleted from one input leaves the other input entries in place', async () => {
+    const p = shared();
+    p.write('a', { k1: 'one', k3: 'three' });
+    p.write('b', { k2: 'two' });
+    await p.run('a');
+    await p.run('b');
+
+    p.write('a', { k1: 'one' });
+    await p.run('a');
+
+    const { es, $owners } = p.sidecar();
+    assert.deepEqual(Object.keys(es).sort(), ['k1', 'k2']);
+    assert.deepEqual($owners, { 'a.json': ['k1'], 'b.json': ['k2'] });
+  });
+
+  test('a sidecar with no owner list keeps the keys the source lacks', async () => {
+    const p = shared();
+    p.write('a', { k1: 'one' });
+    await p.run('a');
+    const { es } = p.sidecar();
+    fs.writeFileSync(p.hashFile, JSON.stringify({ es: { ...es, other: 'deadbeef' } }), 'utf-8');
+
+    p.write('a', { k1: 'one edited' });
+    await p.run('a');
+
+    assert.deepEqual(Object.keys(p.sidecar().es).sort(), ['k1', 'other']);
+  });
+});
+
+describe('translate — a target locale starting with $', () => {
+  test('is rejected, since the sidecar reserves those names', async () => {
+    await assert.rejects(
+      () => translate({ input: '{"greeting":"hello"}', from: 'en', to: '$x', engine: makeEngine() }),
+      (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_CONFIG',
+    );
   });
 });

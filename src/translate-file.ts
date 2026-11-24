@@ -5,9 +5,11 @@ import { buildGlossaryModel } from './glossary.js';
 import {
   type Attempt,
   type Attempts,
+  cappedKeys,
   hashValue,
   localeStore,
   mergeOwnedHashes,
+  ownAttempts,
   ownerId,
   readSidecar,
   type Sidecar,
@@ -27,9 +29,6 @@ import { translateObject } from './translate-object.js';
 import { loadTranslationMemory, memoryKey, pruneMemory, saveTranslationMemory } from './translation-memory.js';
 import type { LocaleHashes, ObjectRun, TranslateResult, TranslationMemory } from './types.js';
 import { setOwn, writeFileAtomic } from './utils/json.js';
-
-/** How many runs may turn a key down before it is left alone until its source changes. */
-const MAX_ATTEMPTS = 3;
 
 export async function translateFile(options: TranslateOptions): Promise<TranslateResult> {
   // A v2 JavaScript caller that still passes one of these would otherwise start a paid
@@ -99,16 +98,37 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     }
     // A locale's hashes move only with its file: nothing written for it means it still
     // owes whatever it owed, whichever other locales this run delivered.
+    // Both files are read again here, not taken from the start of the run: another run in this
+    // process may have saved since, and this one would erase what it recorded. Nothing between
+    // this read and the write awaits, so within one process the merge cannot be interleaved.
     if (useIncremental && Object.keys(written).length > 0) {
+      const current = readSidecar(hashFilePath);
       saveSidecar(
         hashFilePath,
-        mergeRun(sidecar, owner, sourceFlat, Object.keys(written), run, ownAttempts(sidecar.attempts, owner)),
+        mergeRun(
+          current,
+          owner,
+          sourceFlat,
+          Object.keys(written),
+          run,
+          ownAttempts(current.attempts, owner),
+          // `force` sends capped keys, so none was withheld.
+          options.force ? {} : (capped ?? {}),
+        ),
       );
     }
     if (useTranslationMemory) {
-      const yielded = new Set(Object.entries(sourceFlat).map(([key, value]) => memoryKey(value, key)));
+      const yielded = new Set(Object.entries(sourceFlat).map(([key, value]) => memoryKey(value, key, from)));
+      const fresh = loadTranslationMemory(tmFilePath);
+      const touched: TranslationMemory = { ...fresh.memory };
+      for (const [key, locales] of Object.entries(run.memory)) {
+        // An entry this run left as it found it is not its to restore: another run may have pruned it.
+        const atStart = Object.hasOwn(translationMemory, key) ? translationMemory[key] : undefined;
+        if (JSON.stringify(atStart) === JSON.stringify(locales)) continue;
+        setOwn(touched, key, { ...(Object.hasOwn(fresh.memory, key) ? fresh.memory[key] : {}), ...locales });
+      }
       const { memory, owners } = pruneMemory(
-        { memory: run.memory, owners: memoryFile.owners },
+        { memory: touched, owners: fresh.owners },
         ownerId(tmFilePath, inputPath),
         yielded,
       );
@@ -116,6 +136,9 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     }
     return written;
   };
+
+  // What the run plans against: the caps from the sidecar as it was when the run started.
+  const capped = useIncremental ? cappedKeys(ownAttempts(sidecar.attempts, owner), sourceFlat) : undefined;
 
   let run: ObjectRun;
   try {
@@ -129,7 +152,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
       memory: useTranslationMemory ? translationMemory : undefined,
       glossary: glossaryModel ?? undefined,
       force: options.force,
-      capped: useIncremental ? cappedKeys(ownAttempts(sidecar.attempts, owner), sourceFlat) : undefined,
+      capped,
       dryRun: options.dryRun,
       engine: options.engine,
       logger: options.logger,
@@ -181,29 +204,6 @@ function completeFailure(
   return new LoquiError('CHUNK_FAILED', `${failure.message} ${outcome}`, { cause: failure.cause, result });
 }
 
-/** An input's own attempts, never another's and never one inherited from `Object.prototype`. */
-function ownAttempts(attempts: Attempts, owner: string): Record<string, Record<string, Attempt>> {
-  return Object.hasOwn(attempts, owner) ? attempts[owner] : {};
-}
-
-/** The keys each locale has turned down `MAX_ATTEMPTS` times for the source they have now. */
-function cappedKeys(
-  own: Record<string, Record<string, Attempt>>,
-  sourceFlat: Record<string, string>,
-): Record<string, string[]> {
-  return Object.fromEntries(
-    Object.entries(own).map(([locale, keys]) => [
-      locale,
-      Object.entries(keys)
-        .filter(
-          ([key, attempt]) =>
-            Object.hasOwn(sourceFlat, key) && attempt.hash === hashValue(sourceFlat[key]) && attempt.n >= MAX_ATTEMPTS,
-        )
-        .map(([key]) => key),
-    ]),
-  );
-}
-
 /**
  * An input's attempts after a run that wrote `written`: a key the run turned down counts one
  * more, unless its source changed since the last count. One that locale now holds, or the
@@ -214,17 +214,20 @@ function countAttempts(
   sourceFlat: Record<string, string>,
   written: string[],
   run: Pick<ObjectRun, 'hashes' | 'rejected'>,
+  capped: Record<string, string[]>,
 ): Record<string, Record<string, Attempt>> {
   const next: Record<string, Record<string, Attempt>> = { ...own };
   for (const locale of written) {
     const before = Object.hasOwn(own, locale) ? own[locale] : {};
     const turnedDown = new Set(Object.hasOwn(run.rejected, locale) ? run.rejected[locale] : []);
+    const withheld = new Set(Object.hasOwn(capped, locale) ? capped[locale] : []);
     const kept: Record<string, Attempt> = {};
     for (const key of Object.keys(sourceFlat)) {
       const hash = hashValue(sourceFlat[key]);
       const prior = Object.hasOwn(before, key) && before[key].hash === hash ? before[key] : undefined;
       if (turnedDown.has(key)) setOwn(kept, key, { hash, n: (prior?.n ?? 0) + 1 });
-      else if (prior && localeStore(run.hashes, locale)?.[key] !== hash) setOwn(kept, key, prior);
+      else if (prior && (withheld.has(key) || localeStore(run.hashes, locale)?.[key] !== hash))
+        setOwn(kept, key, prior);
     }
     if (Object.keys(kept).length > 0) setOwn(next, locale, kept);
     else delete next[locale];
@@ -244,6 +247,7 @@ function mergeRun(
   delivered: string[],
   run: Pick<ObjectRun, 'hashes' | 'rejected'>,
   ownBefore: Record<string, Record<string, Attempt>>,
+  capped: Record<string, string[]>,
 ): Sidecar {
   const sourceKeys = Object.keys(sourceFlat);
   const runHashes = run.hashes;
@@ -262,7 +266,7 @@ function mergeRun(
   const held = new Set(Object.values(locales).flatMap((store) => Object.keys(store)));
   const owned = new Set([...sourceKeys, ...[...ownedBefore].filter((key) => held.has(key))]);
   const attempts: Attempts = { ...sidecar.attempts };
-  const own = countAttempts(ownBefore, sourceFlat, delivered, run);
+  const own = countAttempts(ownBefore, sourceFlat, delivered, run, capped);
   if (Object.keys(own).length > 0) setOwn(attempts, ownerId, own);
   else delete attempts[ownerId];
   return { locales, owners: { ...sidecar.owners, [ownerId]: [...owned] }, attempts };

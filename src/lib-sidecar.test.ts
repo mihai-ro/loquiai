@@ -202,17 +202,20 @@ describe('translate — inputs sharing one hash sidecar', () => {
     };
     const write = (name: string, doc: Record<string, string>) =>
       fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(doc), 'utf-8');
-    const run = (name: string, to: string[] = ['es']) =>
+    const tmFile = path.join(dir, 'shared-tm.json');
+    const run = (name: string, to: string[] = ['es'], translationMemoryFile?: string) =>
       translate({
         input: path.join(dir, `${name}.json`),
         from: 'en',
         to,
         output: path.join(dir, `${name}-{locale}.json`),
         hashFile,
+        translationMemoryFile,
         engine,
       });
     return {
       hashFile,
+      tmFile,
       write,
       run,
       calls: () => calls,
@@ -266,6 +269,27 @@ describe('translate — inputs sharing one hash sidecar', () => {
     await p.run('a');
 
     assert.deepEqual(Object.keys(p.sidecar().es).sort(), ['k1', 'other']);
+  });
+
+  test("concurrent runs in one process keep each other's owners, hashes and memory entries", async () => {
+    const p = shared();
+    p.write('a', { a1: 'one', a2: 'two' });
+    p.write('b', { b1: 'three' });
+    await Promise.all([p.run('a', ['es'], p.tmFile), p.run('b', ['es'], p.tmFile)]);
+
+    const { es, $owners } = p.sidecar();
+    assert.deepEqual(Object.keys(es).sort(), ['a1', 'a2', 'b1']);
+    assert.deepEqual(Object.keys($owners).sort(), ['a.json', 'b.json']);
+    const memory = JSON.parse(fs.readFileSync(p.tmFile, 'utf-8'));
+    const entries = Object.keys(memory).filter((key) => !key.startsWith('$'));
+    assert.equal(entries.length, 3, 'entries from both inputs');
+
+    p.write('a', { a1: 'one edited', a2: 'two' });
+    p.reset();
+    await p.run('a', ['es'], p.tmFile);
+
+    assert.equal(p.calls(), 1);
+    assert.equal(p.target('a').a1, 'es:one edited');
   });
 });
 

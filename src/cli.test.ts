@@ -7,6 +7,7 @@ import { after, before, describe, test } from 'node:test';
 import { main, run } from './cli.js';
 import type { InputStream } from './cli-init.js';
 import { LoquiError } from './errors.js';
+import { hashValue, ownerId } from './hasher.js';
 
 /** parseArgs slices argv like the real process does, so fixtures carry the two leading slots. */
 function argv(...args: string[]): string[] {
@@ -402,6 +403,59 @@ describe('main — what the CLI still says on stderr', () => {
       assert.equal(process.exitCode, 12);
       assert.equal(streams.out, ' [fr]\n   ✗ missing: b\n   ✗ extra: stale\n Summary: 1 missing, 1 extra, 1 ok\n');
       assert.doesNotMatch(streams.err, /missing|Summary/);
+    } finally {
+      process.exitCode = realExitCode;
+    }
+  });
+
+  test('--validate exits 12 and prints a key the retry cap holds back, until its source changes', async () => {
+    const dir = path.join(tmpDir, 'validate-capped');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'fr.json'), JSON.stringify({ a: 'ancien' }), 'utf-8');
+    const input = inputFile('{"a":"x"}');
+    const hashFile = path.join(dir, 'hash.json');
+    const id = ownerId(hashFile, input);
+    fs.writeFileSync(
+      hashFile,
+      JSON.stringify({
+        fr: { a: hashValue('x') },
+        $owners: { [id]: ['a'] },
+        $attempts: { [id]: { fr: { a: { hash: hashValue('x'), n: 3 } } } },
+      }),
+      'utf-8',
+    );
+    const args = (source: string) => {
+      fs.writeFileSync(input, source, 'utf-8');
+      return [
+        input,
+        '--from',
+        'en',
+        '--to',
+        'fr',
+        '--validate',
+        '--output',
+        path.join(dir, '{locale}.json'),
+        '--hash-file',
+        hashFile,
+        '--config',
+        tmpDir,
+      ];
+    };
+    const realExitCode = process.exitCode;
+
+    try {
+      const held = await captureStreams(async (stdout) => {
+        await withArgv(args('{"a":"x"}'), () => main({ stdout }));
+      });
+      assert.equal(process.exitCode, 12);
+      assert.match(held.out, /capped: a/);
+
+      process.exitCode = undefined;
+      const released = await captureStreams(async (stdout) => {
+        await withArgv(args('{"a":"x again"}'), () => main({ stdout }));
+      });
+      assert.notEqual(process.exitCode, 12);
+      assert.doesNotMatch(released.out, /capped/);
     } finally {
       process.exitCode = realExitCode;
     }

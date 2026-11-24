@@ -10,6 +10,9 @@ export interface Attempt {
   n: number;
 }
 
+/** How many runs may turn a key down before it is left alone until its source changes. */
+export const MAX_ATTEMPTS = 3;
+
 /** Owner id → locale → flat key → its attempts. */
 export type Attempts = Record<string, Record<string, Record<string, Attempt>>>;
 
@@ -77,6 +80,29 @@ function readAttempts(value: unknown): Attempts {
 
 function ownEntries(value: unknown): [string, unknown][] {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.entries(value) : [];
+}
+
+/** An input's own attempts, never another's and never one inherited from `Object.prototype`. */
+export function ownAttempts(attempts: Attempts, owner: string): Record<string, Record<string, Attempt>> {
+  return Object.hasOwn(attempts, owner) ? attempts[owner] : {};
+}
+
+/** The keys each locale has turned down `MAX_ATTEMPTS` times for the source they have now. */
+export function cappedKeys(
+  own: Record<string, Record<string, Attempt>>,
+  sourceFlat: Record<string, string>,
+): Record<string, string[]> {
+  return Object.fromEntries(
+    Object.entries(own).map(([locale, keys]) => [
+      locale,
+      Object.entries(keys)
+        .filter(
+          ([key, attempt]) =>
+            Object.hasOwn(sourceFlat, key) && attempt.hash === hashValue(sourceFlat[key]) && attempt.n >= MAX_ATTEMPTS,
+        )
+        .map(([key]) => key),
+    ]),
+  );
 }
 
 /** The hashes per locale alone, for a reader that has no use for who wrote them. */

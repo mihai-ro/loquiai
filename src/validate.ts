@@ -8,12 +8,15 @@ export interface ValidationResult {
   missing: string[];
   extra: string[];
   ok: string[];
+  /** Keys the retry cap holds back: their source was turned down too often to be sent again. */
+  capped: string[];
 }
 
 export function validateLocales(
   sourceFlat: FlatTranslations,
   existing: Record<string, FlatTranslations>,
   locales: string[],
+  capped: Record<string, string[]> = {},
 ): ValidationResult[] {
   const sourceKeys = new Set(Object.keys(sourceFlat));
   const results: ValidationResult[] = [];
@@ -45,7 +48,14 @@ export function validateLocales(
     extra.sort();
     ok.sort();
 
-    results.push({ locale, fileMissing, missing, extra, ok });
+    results.push({
+      locale,
+      fileMissing,
+      missing,
+      extra,
+      ok,
+      capped: Object.hasOwn(capped, locale) ? [...capped[locale]].sort() : [],
+    });
   }
 
   return results;

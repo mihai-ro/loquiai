@@ -103,6 +103,49 @@ describe('retry cap — a key turned down on every run', () => {
     assert.equal(p.attempts()[path.basename(p.input)].es.greeting.n, 1, 'and the count starts over');
   });
 
+  test('a key blanked in the target while the sidecar holds its hash stays withheld after the cap', async () => {
+    const p = project({ greeting: 'Hello {name}' });
+    await p.run(goodEngine());
+    fs.writeFileSync(path.join(p.dir, 'es.json'), JSON.stringify({ greeting: '' }));
+
+    const engine = brokenEngine();
+    const requests: number[] = [];
+    const warned: number[] = [];
+    for (let run = 1; run <= 8; run++) {
+      const before = engine.sent.length;
+      const result = await p.run(engine);
+      requests.push(engine.sent.length - before);
+      warned.push(capWarnings(result).length);
+    }
+
+    assert.deepEqual(requests, [1, 1, 1, 0, 0, 0, 0, 0]);
+    assert.deepEqual(warned, [0, 0, 0, 1, 1, 1, 1, 1], 'each run after the third logs RETRY_CAP');
+  });
+
+  test('a key the engine always answers with nothing is capped like any other', async () => {
+    const p = project({ k: 'Hello' });
+    const sent: string[] = [];
+    // What the engines make of a key the model left out of its answer: an empty string.
+    const leavesOut: EngineAdapter = {
+      async translateChunk({ chunk, targetLocales }) {
+        sent.push(...Object.keys(chunk.keys));
+        return Object.fromEntries(targetLocales.map((locale) => [locale, { keys: mapValues(chunk.keys, () => '') }]));
+      },
+    };
+
+    const requests: number[] = [];
+    const warned: number[] = [];
+    for (let run = 1; run <= 5; run++) {
+      const before = sent.length;
+      const result = await p.run(leavesOut);
+      requests.push(sent.length - before);
+      warned.push(capWarnings(result).length);
+    }
+
+    assert.deepEqual(requests, [1, 1, 1, 0, 0]);
+    assert.deepEqual(warned, [0, 0, 0, 1, 1], 'runs 4 and 5 log RETRY_CAP');
+  });
+
   test('--force sends a capped key', async () => {
     const p = project({ greeting: 'Hello {name}' });
     const engine = brokenEngine();

@@ -1,6 +1,6 @@
 import { type DiffResult, diffLocales } from './diff.js';
 import { LoquiError } from './errors.js';
-import { loadHashStore } from './hasher.js';
+import { cappedKeys, loadHashStore, ownAttempts, ownerId, readSidecar } from './hasher.js';
 import {
   assertEveryLocaleMapped,
   loadExisting,
@@ -69,14 +69,19 @@ export function diff(options: InspectOptions): DiffReport {
 }
 
 /**
- * Checks that each target file holds exactly the source's keys. A locale with no file
+ * Checks that each target file holds exactly the source's keys, and lists the keys the retry
+ * cap holds back (`capped`). A locale with no file
  * fails with `fileMissing` and every key missing: a gate that skipped it would pass a
  * project that ships without that locale. Only reads: the caller decides what a mismatch means.
  */
 export function validate(options: InspectOptions): ValidationResult[] {
-  const { to, sourceFlat, outputPaths, existing } = load(options);
+  const { inputPath, to, sourceFlat, outputPaths, existing } = load(options);
   if (!outputPaths)
     throw new LoquiError('INVALID_CONFIG', "'output' is required: it names the target files to validate.");
   assertEveryLocaleMapped(outputPaths, to);
-  return validateLocales(sourceFlat, existing, to);
+  // A key the retry cap holds back keeps its old translation, so the files alone look complete.
+  const hashFilePath = sidecarPath(inputPath, options.hashFile, 'hash');
+  const { attempts } = readSidecar(hashFilePath);
+  const capped = cappedKeys(ownAttempts(attempts, ownerId(hashFilePath, inputPath)), sourceFlat);
+  return validateLocales(sourceFlat, existing, to, capped);
 }

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { hashValue } from './hasher.js';
+import { hashValue, ownerId } from './hasher.js';
 import { diff, validate } from './inspect.js';
 
 let root: string;
@@ -135,11 +135,14 @@ describe('validate()', () => {
     );
   });
 
-  test('does not read the hash sidecar, so a corrupt one cannot fail it', () => {
+  test('reads the hash sidecar for capped keys, so a corrupt one fails with PARSE_ERROR', () => {
     const p = project({ a: 'Hello' }, { es: { a: 'Hola' } });
     fs.writeFileSync(path.join(p.dir, '.en.loqui-hash.json'), '<<<<<<< HEAD\n', 'utf-8');
 
-    assert.equal(validate({ input: p.input, to: ['es'], output: p.output, configPath: root }).length, 1);
+    assert.throws(
+      () => validate({ input: p.input, to: ['es'], output: p.output, configPath: root }),
+      (err: unknown) => (err as { code?: string }).code === 'PARSE_ERROR',
+    );
   });
 });
 
@@ -255,5 +258,53 @@ describe('diff() and validate() — inputs', () => {
       () => validate({ input, to: ['es'], output: {}, configPath: root }),
       (err: unknown) => (err as { code?: string }).code === 'PARSE_ERROR',
     );
+  });
+});
+
+describe('validate() — keys the retry cap holds back', () => {
+  /** A project whose es target holds an old value for `a`, and whose sidecar says `a` was turned down `n` times. */
+  function cappedProject(n: number) {
+    const p = project({ a: 'Hello' }, { es: { a: 'Hola vieja' } });
+    const hashFile = path.join(p.dir, '.en.loqui-hash.json');
+    fs.writeFileSync(
+      hashFile,
+      JSON.stringify({
+        es: { a: hashValue('Hello') },
+        $owners: { [ownerId(hashFile, p.input)]: ['a'] },
+        $attempts: { [ownerId(hashFile, p.input)]: { es: { a: { hash: hashValue('Hello'), n } } } },
+      }),
+      'utf-8',
+    );
+    return p;
+  }
+
+  test('lists a key turned down three times for the source it has now', () => {
+    const p = cappedProject(3);
+
+    const [result] = validate({ input: p.input, to: ['es'], output: p.output, configPath: root });
+
+    assert.deepEqual(result.capped, ['a']);
+    assert.deepEqual(result.missing, []);
+  });
+
+  test('does not list a key turned down fewer times, or whose source has changed since', () => {
+    const fewer = cappedProject(2);
+    assert.deepEqual(
+      validate({ input: fewer.input, to: ['es'], output: fewer.output, configPath: root })[0].capped,
+      [],
+    );
+
+    const changed = cappedProject(3);
+    fs.writeFileSync(changed.input, JSON.stringify({ a: 'Hello again' }), 'utf-8');
+    assert.deepEqual(
+      validate({ input: changed.input, to: ['es'], output: changed.output, configPath: root })[0].capped,
+      [],
+    );
+  });
+
+  test('has no capped keys without a sidecar', () => {
+    const p = project({ a: 'Hello' }, { es: { a: 'Hola' } });
+
+    assert.deepEqual(validate({ input: p.input, to: ['es'], output: p.output, configPath: root })[0].capped, []);
   });
 });

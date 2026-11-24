@@ -76,14 +76,18 @@ export function formatValidateReport(results: ValidationResult[]): string {
   let totalMissing = 0;
   let totalExtra = 0;
   let totalOk = 0;
+  let totalCapped = 0;
   for (const r of results) {
     text += reportLine(`[${r.locale}]`);
     if (r.fileMissing) text += reportLine(`  ✗ no target file: all ${r.missing.length} key(s) missing`);
     else for (const key of r.missing) text += reportLine(`  ✗ missing: ${key}`);
     for (const key of r.extra) text += reportLine(`  ✗ extra: ${key}`);
+    for (const key of r.capped) text += reportLine(`  ✗ capped: ${key} (held back by the retry cap, not translated)`);
+    totalCapped += r.capped.length;
     totalMissing += r.missing.length;
     totalExtra += r.extra.length;
     totalOk += r.ok.length;
   }
-  return `${text}${reportLine(`Summary: ${totalMissing} missing, ${totalExtra} extra, ${totalOk} ok`)}`;
+  const capped = totalCapped > 0 ? `, ${totalCapped} capped` : '';
+  return `${text}${reportLine(`Summary: ${totalMissing} missing, ${totalExtra} extra, ${totalOk} ok${capped}`)}`;
 }

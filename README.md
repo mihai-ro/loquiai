@@ -357,6 +357,12 @@ try {
 | `translate({ ...o, diff: true })`                           | `diff(o)`                                            |
 | `translate({ ...o, validate: true })`, then `process.exitCode` | `validate(o)`, then check the result              |
 | `err.partial`                                               | `err.result.locales`                                 |
+| Node ≥ 22.0; a CommonJS bundle for `require()`              | Node ≥ 22.12; ESM only, and `require()` loads it on 22.12+ |
+| `import "@mihairo/loqui/cli"`                               | removed; run the `loqui` bin                         |
+| keys a target file has and the source doesn't are kept      | removed on the next run, with a warning per locale   |
+| a blank target value is kept                                | re-translated                                        |
+| `--force` serves translation memory                         | `--force` ignores translation memory and overwrites it |
+| an `output` record without a target locale skips it silently | rejected with `INVALID_CONFIG`                       |
 | progress printed to stderr                                  | pass `logger: stderrLogger`                          |
 | custom engine `translateChunk(chunk, locales, from, ns, glossary)` | `translateChunk(req)`; `req` is `{ chunk, targetLocales, sourceLocale, namespace, glossaryBlock?, log, onRateLimited }` |
 | `reviewChunk(chunk, initial, locales, from, ns, glossary)`  | `reviewChunk(req)`; `req` adds `initial`             |
@@ -564,8 +570,12 @@ that locale, and a locale you did not run keeps its entry. With no output, a dry
 a run where nothing landed, the sidecar does not change. Keys deleted from the source are
 pruned, so the sidecar tracks the source rather than growing forever.
 
+Several inputs can share one `--hash-file`. Each input prunes only the keys it wrote,
+so the others' entries survive.
+
 A v2 sidecar (one flat map of hashes) is read as the hashes of every locale in `--to`
-and rewritten per locale, so the first v3 run should cover every locale you translate.
+and rewritten per locale. A locale with no hashes of its own yet keeps using the v2
+ones, so the locales can migrate in separate runs.
 
 ```sh
 loqui --input en.json --from en --to es,de --output ./i18n/{locale}.json --incremental

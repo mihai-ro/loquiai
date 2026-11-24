@@ -35,8 +35,8 @@ export interface TranslateObjectOptions {
   namespace?: string;
   force?: boolean;
   /**
-   * Keys to leave unsent, by locale: ones a caller has seen turned down on every run (see
-   * `ObjectRun.rejected`). Each is warned about with code `RETRY_CAP`. `force` sends them anyway.
+   * Per locale, keys the run must not send. The locale still owes them. Each is warned about
+   * with code `RETRY_CAP`. `force` sends them anyway.
    */
   capped?: Record<string, string[]>;
   /** Preview without calling the engine. */
@@ -106,7 +106,9 @@ export async function translateObject(source: JsonObject, options: TranslateObje
 
   const locales: Record<string, JsonObject> = {};
   for (const [locale, flat] of Object.entries(translations)) {
-    locales[locale] = deepSortKeys(unflatten(withStrings(sourceDoc, flat)));
+    locales[locale] = deepSortKeys(
+      unflatten(withStrings(sourceDoc, flat, Object.hasOwn(existing, locale) ? existing[locale] : undefined)),
+    );
   }
 
   const run: ObjectRun = {

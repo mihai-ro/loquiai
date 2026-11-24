@@ -138,11 +138,13 @@ export function unflatten(doc: FlatDocument): Record<string, unknown> {
 /**
  * Builds a document whose translatable strings are `strings` but whose structure and
  * non-string leaves come from `source`. Used to serialize a target locale: only the
- * strings were translated, so everything else must mirror the source it came from.
- * Nothing the existing target file held is carried over: a target holds exactly the
- * source's keys. Strings inside arrays that have no translation are written empty.
+ * strings were translated, so the rest mirrors the source it came from. The exception is a
+ * non-string value the existing `target` holds under the same key with the same JSON type:
+ * it is that locale's own (`rtl`, `firstDay`), and a stale one costs less than lost data.
+ * No other key the target held is carried over: a target holds exactly the source's keys.
+ * Strings inside arrays that have no translation are written empty.
  */
-export function withStrings(source: FlatDocument, strings: FlatTranslations): FlatDocument {
+export function withStrings(source: FlatDocument, strings: FlatTranslations, target?: FlatDocument): FlatDocument {
   // An array has to keep its length and element types, so a string inside one that has
   // no translation is written empty. Outside an array an absent key is left absent: it
   // falls back at runtime, where an empty string would not.
@@ -151,7 +153,21 @@ export function withStrings(source: FlatDocument, strings: FlatTranslations): Fl
   for (const key of Object.keys(source.strings)) {
     if (!Object.hasOwn(filled, key) && isInsideArray(key, arrays)) filled[key] = '';
   }
-  return { strings: filled, values: { ...source.values }, arrayPaths: [...source.arrayPaths] };
+  const values = { ...source.values };
+  if (target) {
+    for (const [key, sourceValue] of Object.entries(source.values)) {
+      if (Object.hasOwn(target.values, key) && jsonType(target.values[key]) === jsonType(sourceValue)) {
+        setOwn(values, key, target.values[key]);
+      }
+    }
+  }
+  return { strings: filled, values, arrayPaths: [...source.arrayPaths] };
+}
+
+/** `null`, an array and an object each count as a type of their own, apart from `typeof`. */
+function jsonType(value: unknown): string {
+  if (value === null) return 'null';
+  return Array.isArray(value) ? 'array' : typeof value;
 }
 
 function isInsideArray(flatKey: string, arrayPaths: Set<string>): boolean {

@@ -203,6 +203,32 @@ describe('withStrings', () => {
   });
 });
 
+describe('withStrings — a target keeps its own non-string values', () => {
+  const source = flatten({ firstDay: 0, rtl: false, max: 5 });
+
+  test('keeps the target value when its JSON type matches the source', () => {
+    const target = flatten({ firstDay: 6, rtl: true, max: '5' });
+    assertLoose.deepEqual(unflatten(withStrings(source, {}, target)), { firstDay: 6, rtl: true, max: 5 });
+  });
+
+  test('takes the source value for a key the target lacks, and drops a key only the target has', () => {
+    const target = flatten({ firstDay: 6, extra: 1 });
+    assertLoose.deepEqual(unflatten(withStrings(source, {}, target)), { firstDay: 6, rtl: false, max: 5 });
+  });
+
+  test('null, array and object are types of their own', () => {
+    const src = flatten({ a: null, b: [], c: {}, d: 1 });
+    const target = flatten({ a: 0, b: {}, c: [], d: null });
+    assertLoose.deepEqual(unflatten(withStrings(src, {}, target)), { a: null, b: [], c: {}, d: 1 });
+    const same = flatten({ a: null, b: [], c: {}, d: 2 });
+    assertLoose.deepEqual(unflatten(withStrings(src, {}, same)), { a: null, b: [], c: {}, d: 2 });
+  });
+
+  test('without a target, the source values are used', () => {
+    assertLoose.deepEqual(unflatten(withStrings(source, {})), { firstDay: 0, rtl: false, max: 5 });
+  });
+});
+
 describe('withStrings — arrays keep their shape', () => {
   const write = (source: Record<string, unknown>, strings: Record<string, string>) =>
     unflatten(withStrings(flatten(source), strings));

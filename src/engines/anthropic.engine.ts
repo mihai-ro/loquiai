@@ -10,11 +10,42 @@ const MAX_RETRIES = 5;
 // Anthropic has no documented hard limit on tool input_schema size. STRUCTURED_OUTPUT_MAX_PROPS
 // mirrors the OpenAI cap for consistency. Above this limit, falls back to prompt-based JSON.
 
+/**
+ * Each model's output cap, asked of the Models API once per process: a model that allows
+ * fewer than MAX_OUTPUT_TOKENS answers a larger `max_tokens` with a 400. The answer is kept
+ * even when it is "unknown" (the lookup failed, or the field is empty): a run then sends
+ * what it always did, and does not ask again on every chunk.
+ */
+const modelCaps = new Map<string, Promise<number | undefined>>();
+
 export class AnthropicEngine extends BaseEngine {
   constructor(config: LoquiConfig) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new LoquiError('AUTH', 'ANTHROPIC_API_KEY environment variable is not set.');
     super(config, apiKey);
+  }
+
+  #outputCap(model: string, apiVersion: string, ctx: CallContext): Promise<number | undefined> {
+    const known = modelCaps.get(model);
+    if (known) return known;
+    const lookup = this.#lookUpOutputCap(model, apiVersion, ctx);
+    modelCaps.set(model, lookup);
+    return lookup;
+  }
+
+  async #lookUpOutputCap(model: string, apiVersion: string, ctx: CallContext): Promise<number | undefined> {
+    try {
+      const info = (await fetchWithRetry(
+        `${ANTHROPIC_API_BASE}/models/${encodeURIComponent(model)}`,
+        { method: 'GET', headers: { 'x-api-key': this.getApiKey(), 'anthropic-version': apiVersion } },
+        { engineName: 'Anthropic', maxRetries: 0, timeoutMs: 10_000, ...this.retryHooks(ctx) },
+      )) as { max_tokens?: unknown } | null;
+      const cap = info?.max_tokens;
+      return typeof cap === 'number' && Number.isInteger(cap) && cap > 0 ? cap : undefined;
+    } catch (err) {
+      ctx.log('debug', `[Anthropic] Could not look up the output limit of ${model}: ${(err as Error).message}`);
+      return undefined;
+    }
   }
 
   protected async makeCall(
@@ -31,7 +62,7 @@ export class AnthropicEngine extends BaseEngine {
 
     const body: Record<string, unknown> = {
       model,
-      max_tokens: deriveMaxTokens(this.config.splitToken),
+      max_tokens: deriveMaxTokens(this.config.splitToken, await this.#outputCap(model, apiVersion, ctx)),
       temperature: this.config.temperature,
       top_p: this.config.topP,
       system: systemPrompt,
@@ -95,9 +126,11 @@ const MIN_OUTPUT_TOKENS = 4_096;
 const MAX_OUTPUT_TOKENS = 64_000;
 const OUTPUT_OVERHEAD = 3;
 
-export function deriveMaxTokens(splitToken: number): number {
+export function deriveMaxTokens(splitToken: number, modelCap?: number): number {
   const estimate = Math.ceil(splitToken * OUTPUT_OVERHEAD);
-  return Math.min(Math.max(estimate, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS);
+  const wanted = Math.min(Math.max(estimate, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS);
+  // The model's own cap is the last word: a request above it is refused outright.
+  return modelCap === undefined ? wanted : Math.min(wanted, modelCap);
 }
 
 /** Builds an Anthropic tool-use input schema for locale → key → string. */

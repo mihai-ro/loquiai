@@ -339,3 +339,76 @@ describe('deriveMaxTokens', () => {
     assert.equal(capturedBody.max_tokens, deriveMaxTokens(8000));
   });
 });
+
+describe('the output cap of the model', () => {
+  before(() => {
+    process.env.ANTHROPIC_API_KEY = FAKE_KEY;
+  });
+  after(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  const LARGEST_SPLIT = 32000;
+  const isLookup = (url: string, init: RequestInit) => init.method === 'GET' && url.includes('/models/');
+
+  /** An engine for `model` whose fetch records every request and answers the model lookup with `lookup`. */
+  function engineFor(model: string, lookup: () => Response) {
+    const engine = new AnthropicEngine({ ...CONFIG_DEFAULTS, engine: 'anthropic', model, splitToken: LARGEST_SPLIT });
+    const calls = { lookups: [] as string[], maxTokens: [] as unknown[] };
+    engine._setFetch(async (url, init) => {
+      if (isLookup(url, init)) {
+        calls.lookups.push(url);
+        return lookup();
+      }
+      calls.maxTokens.push((JSON.parse(init.body as string) as Record<string, unknown>).max_tokens);
+      return new Response(toolUseBody);
+    });
+    return { engine, calls };
+  }
+
+  test('deriveMaxTokens stays under a model cap below its own ceiling', () => {
+    assert.equal(deriveMaxTokens(LARGEST_SPLIT, 8192), 8192);
+    assert.equal(deriveMaxTokens(LARGEST_SPLIT, 128_000), 64_000, 'a higher cap changes nothing');
+    assert.equal(deriveMaxTokens(LARGEST_SPLIT), 64_000, 'no cap is today’s behaviour');
+  });
+
+  test('a model that allows fewer than 64000 gets max_tokens within its cap at the largest splitToken', async () => {
+    const { engine, calls } = engineFor('claude-test-small', () => new Response(JSON.stringify({ max_tokens: 8192 })));
+
+    await engine.translateChunk(req(mockChunk, ['fr']));
+
+    assert.deepEqual(calls.maxTokens, [8192]);
+    assert.match(calls.lookups[0], /\/v1\/models\/claude-test-small$/);
+  });
+
+  test('a failed lookup keeps today’s max_tokens', async () => {
+    const { engine, calls } = engineFor('claude-test-missing', () => new Response('not found', { status: 404 }));
+
+    await engine.translateChunk(req(mockChunk, ['fr']));
+
+    assert.deepEqual(calls.maxTokens, [deriveMaxTokens(LARGEST_SPLIT)]);
+  });
+
+  test('a lookup that answers without a cap keeps today’s max_tokens', async () => {
+    const { engine, calls } = engineFor('claude-test-nocap', () => new Response(JSON.stringify({ max_tokens: null })));
+
+    await engine.translateChunk(req(mockChunk, ['fr']));
+
+    assert.deepEqual(calls.maxTokens, [deriveMaxTokens(LARGEST_SPLIT)]);
+  });
+
+  test('a second call for the same model, on another engine, makes no second lookup', async () => {
+    const first = engineFor('claude-test-once', () => new Response(JSON.stringify({ max_tokens: 16000 })));
+    const second = engineFor('claude-test-once', () => new Response(JSON.stringify({ max_tokens: 16000 })));
+
+    await Promise.all([
+      first.engine.translateChunk(req(mockChunk, ['fr'])),
+      first.engine.translateChunk(req(mockChunk, ['de'])),
+    ]);
+    await second.engine.translateChunk(req(mockChunk, ['fr']));
+
+    assert.equal(first.calls.lookups.length, 1, 'concurrent chunks share one lookup');
+    assert.equal(second.calls.lookups.length, 0);
+    assert.deepEqual(second.calls.maxTokens, [16000]);
+  });
+});

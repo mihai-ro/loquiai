@@ -59,12 +59,12 @@ describe('translation memory pruning', () => {
     const w = workspace();
     const input = w.write('a.json', { one: 'One', two: 'Two' });
     await w.run(input);
-    assert.deepEqual(w.entries().sort(), [memoryKey('One', 'one'), memoryKey('Two', 'two')].sort());
+    assert.deepEqual(w.entries().sort(), [memoryKey('One', 'one', 'en'), memoryKey('Two', 'two', 'en')].sort());
 
     w.write('a.json', { one: 'One' });
     await w.run(input);
 
-    assert.deepEqual(w.entries(), [memoryKey('One', 'one')]);
+    assert.deepEqual(w.entries(), [memoryKey('One', 'one', 'en')]);
   });
 
   test('a shared memory file keeps the other input’s entries', async () => {
@@ -77,7 +77,7 @@ describe('translation memory pruning', () => {
     w.write('a.json', { one: 'One' });
     await w.run(a);
 
-    assert.deepEqual(w.entries().sort(), [memoryKey('One', 'one'), memoryKey('Other', 'other')].sort());
+    assert.deepEqual(w.entries().sort(), [memoryKey('One', 'one', 'en'), memoryKey('Other', 'other', 'en')].sort());
   });
 
   test('an entry another input still lists survives the input that dropped it', async () => {
@@ -90,8 +90,8 @@ describe('translation memory pruning', () => {
     w.write('a.json', { other: 'Other' });
     await w.run(a);
 
-    assert.ok(w.entries().includes(memoryKey('Save', 'save')), 'b still yields it');
-    assert.ok(w.entries().includes(memoryKey('Other', 'other')), 'and a holds the new one');
+    assert.ok(w.entries().includes(memoryKey('Save', 'save', 'en')), 'b still yields it');
+    assert.ok(w.entries().includes(memoryKey('Other', 'other', 'en')), 'and a holds the new one');
   });
 
   test('a dry run prunes nothing', async () => {
@@ -108,13 +108,13 @@ describe('translation memory pruning', () => {
 
   test('entries nobody lists, from a file that predates owners, are kept', async () => {
     const w = workspace();
-    const legacy = memoryKey('Legacy', 'gone');
+    const legacy = memoryKey('Legacy', 'gone', 'en');
     fs.writeFileSync(w.memoryFile, JSON.stringify({ [legacy]: { es: 'Antiguo' } }));
     const input = w.write('a.json', { one: 'One' });
 
     await w.run(input);
 
     assert.ok(w.entries().includes(legacy));
-    assert.deepEqual(w.memory().$owners, { 'a.json': [memoryKey('One', 'one')] });
+    assert.deepEqual(w.memory().$owners, { 'a.json': [memoryKey('One', 'one', 'en')] });
   });
 });

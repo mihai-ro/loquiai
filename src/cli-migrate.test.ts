@@ -52,7 +52,8 @@ function migrate(dir: string, ...tokens: string[]): string {
       callback();
     },
   });
-  runMigrate([...tokens, '--config', dir], stdout);
+  // `--from` defaults to en; a later one among `tokens` overrides it.
+  runMigrate(['--from', 'en', ...tokens, '--config', dir], stdout);
   return chunks.join('');
 }
 
@@ -135,7 +136,7 @@ describe('loqui migrate — translation memory', () => {
 
     const out = migrate(p.dir, '--to', 'es,pt', a);
 
-    assert.deepEqual(p.read('.a.loqui-tm.json'), { [memoryKey('Hello', 'greeting')]: { es: 'Hola', pt: 'Olá' } });
+    assert.deepEqual(p.read('.a.loqui-tm.json'), { [memoryKey('Hello', 'greeting', 'en')]: { es: 'Hola', pt: 'Olá' } });
     assert.match(out, /converted 1 entry, dropped 1 whose string is in none of the inputs/);
   });
 
@@ -149,21 +150,25 @@ describe('loqui migrate — translation memory', () => {
     const { memory: migrated } = loadTranslationMemory(p.file('.a.loqui-tm.json'));
     assert.deepEqual(
       Object.keys(migrated).sort(),
-      [memoryKey('Save', 'buttons.save'), memoryKey('Save', 'menu.save'), memoryKey('Save', 'top')].sort(),
+      [
+        memoryKey('Save', 'buttons.save', 'en'),
+        memoryKey('Save', 'menu.save', 'en'),
+        memoryKey('Save', 'top', 'en'),
+      ].sort(),
     );
   });
 
   test('keeps the owners a file already lists, and does not take `$owners` for a v2 entry', () => {
     const p = project();
     const a = p.write('a.json', { x: 'Alpha' });
-    const owners = { 'a.json': [memoryKey('Alpha', 'x')] };
+    const owners = { 'a.json': [memoryKey('Alpha', 'x', 'en')] };
     p.write('.a.loqui-tm.json', { $owners: owners, [hashValue('Alpha')]: { es: 'A' } });
 
     migrate(p.dir, '--to', 'es', a);
 
     const migrated = p.read('.a.loqui-tm.json') as Record<string, unknown>;
     assert.deepEqual(migrated.$owners, owners);
-    assert.deepEqual(migrated[memoryKey('Alpha', 'x')], { es: 'A' });
+    assert.deepEqual(migrated[memoryKey('Alpha', 'x', 'en')], { es: 'A' });
   });
 
   test('converts each input default memory file in one run, without a flag', () => {
@@ -175,8 +180,8 @@ describe('loqui migrate — translation memory', () => {
 
     migrate(p.dir, '--to', 'es', a, b);
 
-    assert.deepEqual(p.read('.a.loqui-tm.json'), { [memoryKey('Alpha', 'x')]: { es: 'A' } });
-    assert.deepEqual(p.read('.b.loqui-tm.json'), { [memoryKey('Beta', 'y')]: { es: 'B' } });
+    assert.deepEqual(p.read('.a.loqui-tm.json'), { [memoryKey('Alpha', 'x', 'en')]: { es: 'A' } });
+    assert.deepEqual(p.read('.b.loqui-tm.json'), { [memoryKey('Beta', 'y', 'en')]: { es: 'B' } });
   });
 
   test('an explicit memory file overrides the default, and an existing v3 entry wins a locale', () => {
@@ -184,18 +189,52 @@ describe('loqui migrate — translation memory', () => {
     const a = p.write('a.json', { x: 'Alpha' });
     p.write('tm.json', {
       [hashValue('Alpha')]: { es: 'old', pt: 'velho' },
-      [memoryKey('Alpha', 'x')]: { es: 'new' },
+      [memoryKey('Alpha', 'x', 'en')]: { es: 'new' },
     });
 
     migrate(p.dir, '--to', 'es', a, '--translation-memory-file', p.file('tm.json'));
 
-    assert.deepEqual(p.read('tm.json'), { [memoryKey('Alpha', 'x')]: { es: 'new', pt: 'velho' } });
+    assert.deepEqual(p.read('tm.json'), { [memoryKey('Alpha', 'x', 'en')]: { es: 'new', pt: 'velho' } });
+  });
+
+  test('--from names the source locale the v2 entries belong to, so an en run serves them without a request', async () => {
+    const p = project();
+    const a = p.write('a.json', { greeting: 'Hello' });
+    p.write('.a.loqui-tm.json', { [hashValue('Hello')]: { es: 'Hola' } });
+
+    migrate(p.dir, '--from', 'en', '--to', 'es', a);
+
+    let calls = 0;
+    const engine: EngineAdapter = {
+      async translateChunk() {
+        calls++;
+        return {};
+      },
+    };
+    const result = await translate({
+      input: a,
+      from: 'en',
+      to: ['es'],
+      translationMemoryFile: p.file('.a.loqui-tm.json'),
+      configPath: p.dir,
+      engine,
+    });
+    assert.equal(calls, 0);
+    assert.equal(result.locales.es.greeting, 'Hola');
+  });
+
+  test('a migrate with no source locale, from --from or the config, is a usage error', () => {
+    const p = project();
+    const a = p.write('a.json', { greeting: 'Hello' });
+    const devNull = new Writable({ write: (_chunk, _encoding, callback) => callback() });
+
+    assert.throws(() => runMigrate(['--to', 'es', a, '--config', p.dir], devNull), usageError('INVALID_USAGE'));
   });
 
   test('a memory file that is already v3 is left as it is', () => {
     const p = project();
     const a = p.write('a.json', { x: 'Alpha' });
-    p.write('.a.loqui-tm.json', { [memoryKey('Alpha', 'x')]: { es: 'A' } });
+    p.write('.a.loqui-tm.json', { [memoryKey('Alpha', 'x', 'en')]: { es: 'A' } });
     const before = fs.readFileSync(p.file('.a.loqui-tm.json'), 'utf-8');
 
     const out = migrate(p.dir, '--to', 'es', a);

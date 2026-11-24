@@ -17,6 +17,8 @@ import { isUntranslated } from './untranslated.js';
 /** What planning needs of a run: the source, what each locale already has, and what memory knows. */
 export interface PlanOptions {
   sourceFlat: FlatTranslations;
+  /** the source locale: memory is keyed by it, so another language's "Gift" is not served. */
+  from: string;
   to: string[];
   namespace: string;
   config: LoquiConfig;
@@ -72,6 +74,7 @@ export function planRun(
 ): RunPlan {
   const {
     sourceFlat,
+    from,
     to,
     namespace,
     config,
@@ -100,7 +103,7 @@ export function planRun(
   const withheld: Record<string, Set<string>> = {};
 
   for (const locale of to) {
-    const existingFlat = existing[locale] ?? {};
+    const existingFlat = Object.hasOwn(existing, locale) ? existing[locale] : {};
     workingTargets[locale] = Object.fromEntries(
       Object.entries(existingFlat).filter(([key]) => Object.hasOwn(sourceFlat, key)),
     );
@@ -178,7 +181,7 @@ export function planRun(
   const keysNeedingTranslation: FlatTranslations = {};
 
   for (const key of allKeysNeeded) {
-    const hash = memoryKey(sourceFlat[key], key);
+    const hash = memoryKey(sourceFlat[key], key, from);
     memoryKeys[key] = hash;
     // A locale is active because of some key; that does not make every key its own.
     const localesNeeding = activeLocales.filter((locale) => Object.hasOwn(keysToTranslatePerLocale[locale], key));

@@ -25,9 +25,9 @@ export function isMemoryKey(key: string): boolean {
  * out of it: the first would give every key its own entry, the second would stop inputs
  * that share a memory file from sharing what they know.
  */
-export function memoryKey(value: string, flatKey: string): string {
+export function memoryKey(value: string, flatKey: string, from: string): string {
   const context = splitFlatKey(flatKey).slice(0, -1).join('\0');
-  return createHash('sha256').update(`${value}\0${context}`).digest('hex').slice(0, 32);
+  return createHash('sha256').update(`${from}\0${value}\0${context}`).digest('hex').slice(0, 32);
 }
 
 /** What a memory file holds: the entries, and which input listed which of them. */

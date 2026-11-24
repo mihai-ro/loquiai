@@ -36,7 +36,7 @@ describe('translateJson — translation memory hit rate', () => {
   test('a partial memory hit serves the cached locale and sends only the rest', async () => {
     const sourceFlat = { alpha: 'Alpha' };
     // fr is cached, de is not
-    const translationMemory = { [memoryKey('Alpha', 'alpha')]: { fr: 'FROM-TM-fr' } };
+    const translationMemory = { [memoryKey('Alpha', 'alpha', 'en')]: { fr: 'FROM-TM-fr' } };
     const asked: string[][] = [];
 
     const engine: EngineAdapter = {
@@ -84,13 +84,48 @@ describe('translateJson — translation memory hit rate', () => {
       to: ['fr', 'de'],
       namespace: 'test',
       config,
-      translationMemory: { [memoryKey('Alpha', 'alpha')]: { fr: 'TM-fr', de: 'TM-de' } },
+      translationMemory: { [memoryKey('Alpha', 'alpha', 'en')]: { fr: 'TM-fr', de: 'TM-de' } },
       engine,
     });
 
     assert.equal(called, false);
     assert.equal(translations.fr.alpha, 'TM-fr');
     assert.equal(translations.de.alpha, 'TM-de');
+  });
+});
+
+describe('translateJson — one memory file shared by sources in different languages', () => {
+  test('a translation made from en is not served for the same string written in de', async () => {
+    const sent: string[] = [];
+    const engine: EngineAdapter = {
+      async translateChunk({ chunk, targetLocales }) {
+        sent.push(...Object.values(chunk.keys));
+        return Object.fromEntries(
+          targetLocales.map((locale) => [
+            locale,
+            { keys: Object.fromEntries(Object.keys(chunk.keys).map((key) => [key, `ENGINE-${locale}`])) },
+          ]),
+        );
+      },
+    };
+    const run = (from: string, translationMemory: Record<string, Record<string, string>>) =>
+      translateJson({
+        logger: silent,
+        sourceFlat: { gift: 'Gift' },
+        from,
+        to: ['es'],
+        namespace: 'test',
+        config,
+        translationMemory,
+        engine,
+      });
+
+    const first = await run('en', {});
+    first.updatedTranslationMemory[Object.keys(first.updatedTranslationMemory)[0]] = { es: 'Regalo' };
+    const second = await run('de', first.updatedTranslationMemory);
+
+    assert.equal(sent.length, 2, 'the de run sends the key itself');
+    assert.equal(second.translations.es.gift, 'ENGINE-es');
   });
 });
 
@@ -134,7 +169,7 @@ describe('translateJson — translation memory does not confuse strings whose ha
       to: ['fr'],
       namespace: 'test',
       config,
-      translationMemory: { [memoryKey(first, 'x')]: { fr: 'FROM-MEMORY' } },
+      translationMemory: { [memoryKey(first, 'x', 'en')]: { fr: 'FROM-MEMORY' } },
       engine: recordingEngine(sent),
     });
 
@@ -152,7 +187,7 @@ describe('translateJson — translation memory does not confuse strings whose ha
       to: ['fr'],
       namespace: 'test',
       config,
-      translationMemory: { [memoryKey(first, 'x')]: { fr: 'FROM-MEMORY' } },
+      translationMemory: { [memoryKey(first, 'x', 'en')]: { fr: 'FROM-MEMORY' } },
       engine: recordingEngine(sent),
     });
 
@@ -174,7 +209,7 @@ describe('translateJson — translation memory does not confuse strings whose ha
 
     assert.deepEqual(
       Object.keys(updatedTranslationMemory).sort(),
-      [memoryKey(first, 'x'), memoryKey(second, 'y')].sort(),
+      [memoryKey(first, 'x', 'en'), memoryKey(second, 'y', 'en')].sort(),
     );
   });
 });
@@ -259,8 +294,8 @@ describe('translateJson — translation memory keyed by context', () => {
 describe('translateJson — --force and translation memory', () => {
   const sourceFlat = { one: 'One', two: 'Two', blank: '' };
   const remembered = () => ({
-    [memoryKey('One', 'one')]: { fr: 'UN-FROM-MEMORY' },
-    [memoryKey('Two', 'two')]: { fr: 'DEUX-FROM-MEMORY' },
+    [memoryKey('One', 'one', 'en')]: { fr: 'UN-FROM-MEMORY' },
+    [memoryKey('Two', 'two', 'en')]: { fr: 'DEUX-FROM-MEMORY' },
   });
 
   function recordingEngine(sent: string[]): EngineAdapter {
@@ -313,8 +348,8 @@ describe('translateJson — --force and translation memory', () => {
     assert.deepEqual(sent.sort(), ['one', 'two']);
     assert.equal(translations.fr.one, 'NEW-One');
     assert.equal(translations.fr.blank, '', 'a blank value is still copied, not sent');
-    assert.deepEqual(updatedTranslationMemory[memoryKey('One', 'one')], { fr: 'NEW-One' });
-    assert.deepEqual(updatedTranslationMemory[memoryKey('Two', 'two')], { fr: 'NEW-Two' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('One', 'one', 'en')], { fr: 'NEW-One' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Two', 'two', 'en')], { fr: 'NEW-Two' });
   });
 });
 

@@ -226,7 +226,7 @@ describe('translateJson — a changed key that did not land', () => {
   test('does not write the stale value to translation memory under the new hash', async () => {
     const { updatedTranslationMemory } = await runWithFailingChunk();
 
-    assert.equal(updatedTranslationMemory[memoryKey(newSource, 'changed')], undefined);
+    assert.equal(updatedTranslationMemory[memoryKey(newSource, 'changed', 'en')], undefined);
   });
 
   test('sends the key to the engine again on the next run', async () => {
@@ -282,11 +282,11 @@ describe('translateJson — a changed key that did not land', () => {
     assert.equal(translations.de.changed, 'ALT ${name}', 'precondition: the de result was rejected');
     assert.equal(updatedHashStore.fr.changed, hashValue(source.changed), 'fr landed');
     assert.equal(updatedHashStore.de.changed, oldHash, 'de did not');
-    assert.deepEqual(updatedTranslationMemory[memoryKey('Hello ${name}', 'changed')], { fr: 'Hello ${name}' });
+    assert.deepEqual(updatedTranslationMemory[memoryKey('Hello ${name}', 'changed', 'en')], { fr: 'Hello ${name}' });
   });
 
   describe('with one locale served from translation memory', () => {
-    const memoryHash = memoryKey(newSource, 'changed');
+    const memoryHash = memoryKey(newSource, 'changed', 'en');
     const translationMemory = () => ({ [memoryHash]: { fr: 'MEMOIRE' } });
     const existingLocales = { fr: { changed: 'ANCIENNE' }, de: { changed: 'ALTE' } };
 

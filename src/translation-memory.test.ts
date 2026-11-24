@@ -26,7 +26,7 @@ describe('translationMemory', () => {
   });
 
   it('loadTranslationMemory loads existing translation memory', () => {
-    const data = { [memoryKey('hello', 'greeting')]: { fr: 'bonjour', de: 'hallo' } };
+    const data = { [memoryKey('hello', 'greeting', 'en')]: { fr: 'bonjour', de: 'hallo' } };
     fs.writeFileSync(tmPath, JSON.stringify(data, null, 2));
     assert.deepStrictEqual(loadTranslationMemory(tmPath).memory, data);
   });
@@ -35,7 +35,7 @@ describe('translationMemory', () => {
     fs.writeFileSync(
       tmPath,
       JSON.stringify({
-        [memoryKey('hello', 'greeting')]: { fr: 'bonjour' },
+        [memoryKey('hello', 'greeting', 'en')]: { fr: 'bonjour' },
         '811c9dc5': { fr: 'old one' },
         e8d4a2b1: { fr: 'old two' },
       }),
@@ -53,21 +53,22 @@ describe('translationMemory', () => {
   });
 
   it('memoryKey is 32 lowercase hex characters and stable', () => {
-    assert.match(memoryKey('hello', 'greeting'), /^[0-9a-f]{32}$/);
-    assert.strictEqual(memoryKey('hello', 'greeting'), memoryKey('hello', 'greeting'));
-    assert.notStrictEqual(memoryKey('hello', 'greeting'), memoryKey('Hello', 'greeting'));
+    assert.match(memoryKey('hello', 'greeting', 'en'), /^[0-9a-f]{32}$/);
+    assert.strictEqual(memoryKey('hello', 'greeting', 'en'), memoryKey('hello', 'greeting', 'en'));
+    assert.notStrictEqual(memoryKey('hello', 'greeting', 'en'), memoryKey('Hello', 'greeting', 'en'));
+    assert.notStrictEqual(memoryKey('hello', 'greeting', 'en'), memoryKey('hello', 'greeting', 'de'), 'another source');
   });
 
   it('memoryKey tells one string apart by the parent path of its key, and nothing else', () => {
-    const save = memoryKey('Save', 'buttons.save');
+    const save = memoryKey('Save', 'buttons.save', 'en');
 
-    assert.notStrictEqual(save, memoryKey('Save', 'menu.save'), 'another parent');
-    assert.notStrictEqual(save, memoryKey('Save', 'save'), 'no parent');
-    assert.strictEqual(save, memoryKey('Save', 'buttons.keep'), 'a sibling shares the parent');
-    assert.strictEqual(memoryKey('Item', 'list.0'), memoryKey('Item', 'list.1'), 'array items share it');
+    assert.notStrictEqual(save, memoryKey('Save', 'menu.save', 'en'), 'another parent');
+    assert.notStrictEqual(save, memoryKey('Save', 'save', 'en'), 'no parent');
+    assert.strictEqual(save, memoryKey('Save', 'buttons.keep', 'en'), 'a sibling shares the parent');
+    assert.strictEqual(memoryKey('Item', 'list.0', 'en'), memoryKey('Item', 'list.1', 'en'), 'array items share it');
     assert.notStrictEqual(
-      memoryKey('Save', 'a\\.b.c'),
-      memoryKey('Save', 'a.b.c'),
+      memoryKey('Save', 'a\\.b.c', 'en'),
+      memoryKey('Save', 'a.b.c', 'en'),
       'a dot inside a segment is not a level',
     );
   });
@@ -86,7 +87,7 @@ describe('translationMemory', () => {
     assert.ok(pair, 'a 32-bit hash collides within a couple of million strings');
     const [a, b] = pair;
     assert.strictEqual(hashValue(a), hashValue(b));
-    assert.notStrictEqual(memoryKey(a, 'k'), memoryKey(b, 'k'));
+    assert.notStrictEqual(memoryKey(a, 'k', 'en'), memoryKey(b, 'k', 'en'));
   });
 
   it('saveTranslationMemory writes to file', () => {
@@ -133,7 +134,7 @@ describe('translationMemory', () => {
   });
 
   it('load/save roundtrip preserves data', () => {
-    const original = { [memoryKey('hello', 'greeting')]: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
+    const original = { [memoryKey('hello', 'greeting', 'en')]: { fr: 'bonjour', de: 'hallo', es: 'hola' } };
     saveTranslationMemory(tmPath, original);
     assert.deepStrictEqual(loadTranslationMemory(tmPath).memory, original);
   });

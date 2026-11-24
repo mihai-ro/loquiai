@@ -6,7 +6,7 @@ loqui — i18n translation CLI
 Usage:
   loqui [input] [options]
   loqui init                    Interactive setup wizard — creates .loqui.json
-  loqui migrate [options]       Convert v2 hash sidecars and translation memory to v3 (run once)
+  loqui migrate [options]       Convert v2 hash sidecars and translation memory to v3 (run once, needs --from)
 
   [input] — the path of a JSON file, one of:
     --input <file>         loqui --input en.json --from en --to es
@@ -53,7 +53,7 @@ Exit codes:
   9  INVALID_CONFIG  — .loqui.json is missing required fields or has invalid values
   10 TRUNCATED       — the engine hit its output token limit mid-response
   11 INVALID_USAGE   — invalid command-line usage
-  12 VALIDATION_FAILED — --validate found missing or extra keys, or a locale with no file
+  12 VALIDATION_FAILED — --validate found missing or extra keys, keys held back by the retry cap, or a locale with no file
   13 INPUT_NOT_FOUND — the input file does not exist
 `.trim();
 

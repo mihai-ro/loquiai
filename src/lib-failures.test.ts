@@ -163,7 +163,7 @@ describe('translate — a partial run keeps what it paid for', () => {
       const dir = nextTmp();
       fs.mkdirSync(dir, { recursive: true });
       const tmFile = path.join(dir, 'tm.json');
-      fs.writeFileSync(tmFile, JSON.stringify({ [memoryKey('Hello', 'served')]: { fr: 'Bonjour' } }), 'utf-8');
+      fs.writeFileSync(tmFile, JSON.stringify({ [memoryKey('Hello', 'served', 'en')]: { fr: 'Bonjour' } }), 'utf-8');
       try {
         await translate({
           input: inputFile(JSON.stringify({ served: 'Hello', sent: 'World' })),

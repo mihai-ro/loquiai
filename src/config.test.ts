@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { loadConfig } from './config.js';
 import { LoquiError } from './errors.js';
-import { resolveConfig } from './project.js';
+import { resolveConfig, resolveTargets } from './project.js';
 import { CONFIG_DEFAULTS } from './types.js';
 
 function assertInvalidConfig(fn: () => unknown, pattern?: RegExp): void {
@@ -150,6 +150,16 @@ describe('loadConfig — locale validation', () => {
     const dir = makeDir();
     writeConfig(dir, { to: ['fr', ''] });
     assert.throws(() => loadConfig(dir), /'to' must be an array/);
+  });
+
+  test('rejects an empty target locale from a comma-separated list', () => {
+    for (const to of ['es,', 'es, ,pt']) {
+      assert.throws(
+        () => resolveTargets(to, CONFIG_DEFAULTS),
+        (err: unknown) => err instanceof LoquiError && err.code === 'INVALID_CONFIG' && /empty/.test(err.message),
+        to,
+      );
+    }
   });
 
   test('accepts valid from and to', () => {

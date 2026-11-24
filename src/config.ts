@@ -80,6 +80,9 @@ function parseFile(filePath: string): LoquiConfig {
  * result without an error.
  */
 export function validateTargets(to: string[]): void {
+  if (to.some((locale) => locale.trim() === '')) {
+    throw new LoquiError('INVALID_CONFIG', 'a target locale is empty: check --to for a stray comma');
+  }
   if (to.includes('__proto__')) {
     throw new LoquiError('INVALID_CONFIG', "'__proto__' is not a valid target locale");
   }

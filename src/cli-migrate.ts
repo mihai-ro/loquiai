@@ -6,10 +6,11 @@ import { isMemoryKey, memoryKey, saveTranslationMemory } from './translation-mem
 import type { FlatTranslations, TranslationMemory } from './types.js';
 import { readJson, writeJson } from './utils/json.js';
 
-const VALUE_FLAGS = new Set(['--input', '--to', '--hash-file', '--translation-memory-file', '--config']);
+const VALUE_FLAGS = new Set(['--input', '--from', '--to', '--hash-file', '--translation-memory-file', '--config']);
 
 export interface MigrateArgs {
   inputs: string[];
+  from: string | null;
   to: string | null;
   config: string | null;
   hashFile: string | null;
@@ -21,6 +22,7 @@ export interface MigrateArgs {
 export function parseMigrateArgs(tokens: string[]): MigrateArgs {
   const args: MigrateArgs = {
     inputs: [],
+    from: null,
     to: null,
     config: null,
     hashFile: null,
@@ -46,6 +48,7 @@ export function parseMigrateArgs(tokens: string[]): MigrateArgs {
     }
     value = value.trim();
     if (name === '--input') args.inputs.push(value);
+    else if (name === '--from') args.from = value;
     else if (name === '--to') args.to = value;
     else if (name === '--hash-file') args.hashFile = value;
     else if (name === '--translation-memory-file') args.translationMemoryFile = value;
@@ -80,7 +83,7 @@ function migrateSidecar(file: string, group: MigratedInput[], to: string[]): str
   return `${file}: converted ${Object.keys(raw).length} key(s) to ${to.join(', ')} for ${group.length} input(s)`;
 }
 
-function migrateMemory(file: string, group: MigratedInput[]): string {
+function migrateMemory(file: string, group: MigratedInput[], from: string): string {
   const raw = readJson(file) as TranslationMemory;
   if (Object.keys(raw).length === 0) return `${file}: not found, skipped`;
   const old = Object.keys(raw).filter((key) => !key.startsWith('$') && !isMemoryKey(key));
@@ -91,7 +94,7 @@ function migrateMemory(file: string, group: MigratedInput[]): string {
   for (const { sourceFlat } of group) {
     for (const [flatKey, value] of Object.entries(sourceFlat)) {
       const hash = hashValue(value);
-      current.set(hash, [...new Set([...(current.get(hash) ?? []), memoryKey(value, flatKey)])]);
+      current.set(hash, [...new Set([...(current.get(hash) ?? []), memoryKey(value, flatKey, from)])]);
     }
   }
   const migrated: TranslationMemory = Object.fromEntries(Object.entries(raw).filter(([key]) => isMemoryKey(key)));
@@ -119,6 +122,11 @@ export function runMigrate(tokens: string[], stdout: NodeJS.WritableStream): voi
     throw new LoquiError('INVALID_USAGE', 'loqui migrate needs at least one input: --input <file>, repeatable.');
   }
   const config = resolveConfig(args.config ?? undefined, undefined);
+  // v2 memory did not record the language it was translated from; a v3 key does.
+  const from = args.from ?? config.from;
+  if (!from) {
+    throw new LoquiError('INVALID_USAGE', 'loqui migrate needs --from <locale>, or a `from` in the config.');
+  }
   if (!args.to && !config.to) {
     throw new LoquiError('INVALID_USAGE', 'loqui migrate needs --to <locales>, or a `to` in the config.');
   }
@@ -137,6 +145,6 @@ export function runMigrate(tokens: string[], stdout: NodeJS.WritableStream): voi
   for (const [file, group] of groupBy(inputs, (input) =>
     sidecarPath(input.inputPath, args.translationMemoryFile ?? undefined, 'tm'),
   )) {
-    stdout.write(`${migrateMemory(file, group)}\n`);
+    stdout.write(`${migrateMemory(file, group, from)}\n`);
   }
 }

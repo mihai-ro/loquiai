@@ -498,12 +498,18 @@ describe('translate — locale and term names that match Object.prototype member
       {
         from: 'en',
         to: ['constructor'],
-        memory: { [memoryKey('Hello', 'greeting')]: { fr: 'Bonjour' } },
+        memory: { [memoryKey('Hello', 'greeting', 'en')]: { fr: 'Bonjour' } },
         engine: counting,
       },
     );
 
     assert.equal(calls, 1);
     assert.deepEqual(run.locales.constructor, { greeting: 'HELLO' });
+  });
+
+  test('a locale named constructor keeps a source key that Object also has', async () => {
+    const run = await translateObject({ name: 'Hello' }, { from: 'en', to: ['constructor'], engine: makeEngine() });
+
+    assert.deepEqual(run.locales.constructor, { name: 'HELLO' });
   });
 });

@@ -1,5 +1,6 @@
 import { HELP_TEXT, parseArgs } from './cli-args.js';
 import { type InputStream, runInit } from './cli-init.js';
+import { runMigrate } from './cli-migrate.js';
 import {
   formatDiffReport,
   formatValidateReport,
@@ -35,6 +36,11 @@ export interface CliIO {
 export async function main({ stdin = process.stdin, stdout = process.stdout }: CliIO = {}): Promise<void> {
   if (process.argv[2] === 'init') {
     await runInit({ input: stdin, output: stdout });
+    return;
+  }
+
+  if (process.argv[2] === 'migrate') {
+    runMigrate(process.argv.slice(3), stdout);
     return;
   }
 

@@ -6,6 +6,7 @@ loqui — i18n translation CLI
 Usage:
   loqui [input] [options]
   loqui init                    Interactive setup wizard — creates .loqui.json
+  loqui migrate [options]       Convert v2 hash sidecars and translation memory to v3 (run once)
 
   [input] — one of:
     --input <file>         read from a JSON file

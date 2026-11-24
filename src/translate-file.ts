@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type FailedRunResult, LoquiError } from './errors.js';
 import { buildGlossaryModel } from './glossary.js';
-import { localeStore, mergeOwnedHashes, readSidecar, type Sidecar, saveSidecar } from './hasher.js';
+import { localeStore, mergeOwnedHashes, ownerId, readSidecar, type Sidecar, saveSidecar } from './hasher.js';
 import type { TranslateOptions } from './lib.js';
 import {
   assertEveryLocaleMapped,
@@ -55,10 +55,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
   const sidecar: Sidecar = hashFilePath && useIncremental ? readSidecar(hashFilePath, to) : { locales: {}, owners: {} };
   const hashStore: LocaleHashes = sidecar.locales;
   // Inputs sharing one sidecar are told apart by their path from it; raw JSON has only its namespace.
-  const ownerId =
-    hashFilePath && inputPath
-      ? path.relative(path.dirname(hashFilePath), inputPath).split(path.sep).join('/')
-      : namespace;
+  const owner = hashFilePath && inputPath ? ownerId(hashFilePath, inputPath) : namespace;
 
   // load translation memory if enabled
   const useTranslationMemory = options.translationMemory || Boolean(options.translationMemoryFile);
@@ -91,7 +88,7 @@ export async function translateFile(options: TranslateOptions): Promise<Translat
     // A locale's hashes move only with its file: nothing written for it means it still
     // owes whatever it owed, whichever other locales this run delivered.
     if (useIncremental && hashFilePath && Object.keys(written).length > 0) {
-      saveSidecar(hashFilePath, mergeRun(sidecar, ownerId, Object.keys(sourceFlat), Object.keys(written), run.hashes));
+      saveSidecar(hashFilePath, mergeRun(sidecar, owner, Object.keys(sourceFlat), Object.keys(written), run.hashes));
     }
     if (useTranslationMemory && tmFilePath) saveTranslationMemory(tmFilePath, run.memory);
     return written;

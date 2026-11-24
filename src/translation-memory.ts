@@ -6,6 +6,11 @@ import { readJson, writeJson } from './utils/json.js';
 
 const MEMORY_KEY_FORMAT = /^[0-9a-f]{32}$/;
 
+/** Whether a memory key is a `memoryKey()`, as opposed to the 8-character hash v2 used. */
+export function isMemoryKey(key: string): boolean {
+  return MEMORY_KEY_FORMAT.test(key);
+}
+
 /**
  * The key a source string is remembered under. A 32-bit hash is fine for noticing that
  * one key's own text changed, but as the identity of a string across a whole project it
@@ -27,7 +32,7 @@ export function loadTranslationMemory(tmPath: string): { memory: TranslationMemo
   const current: TranslationMemory = {};
   let dropped = 0;
   for (const [key, entry] of Object.entries(data)) {
-    if (MEMORY_KEY_FORMAT.test(key)) current[key] = entry;
+    if (isMemoryKey(key)) current[key] = entry;
     else dropped++;
   }
   const warnings =

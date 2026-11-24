@@ -23,7 +23,7 @@ export interface Sidecar {
  */
 export function readSidecar(hashFile: string, to: string[]): Sidecar {
   const raw = readJson(hashFile) as Record<string, unknown>;
-  const isV2 = Object.values(raw).some((value) => typeof value === 'string');
+  const isV2 = isV2Sidecar(raw);
   const v2 = isV2 ? (raw as HashStore) : readV2(raw.$v2);
   const locales = isV2
     ? {}
@@ -37,6 +37,16 @@ export function readSidecar(hashFile: string, to: string[]): Sidecar {
 function readV2(value: unknown): HashStore | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   return Object.fromEntries(Object.entries(value).filter(([, hash]) => typeof hash === 'string')) as HashStore;
+}
+
+/** A v2 sidecar is one flat map of hashes, so its values are strings where v3 has objects. */
+export function isV2Sidecar(raw: Record<string, unknown>): boolean {
+  return Object.values(raw).some((value) => typeof value === 'string');
+}
+
+/** What an input is called in `$owners`: its path from the sidecar, with `/` separators. */
+export function ownerId(hashFile: string, inputPath: string): string {
+  return path.relative(path.dirname(hashFile), inputPath).split(path.sep).join('/');
 }
 
 function readOwners(value: unknown): Record<string, string[]> {
